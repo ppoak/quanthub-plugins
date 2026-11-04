@@ -9,13 +9,13 @@ description: Build and validate deterministic local A-share backtests using next
 
 ## 安装
 
-先检查项目是否已有所需包，缺少或需更新版本时，在已有 uv 项目目录运行。将 `<tag>` 替换为所用插件的版本标签：
+先检查项目已有的 Python 包。缺少或需更新时，从 [Releases](https://github.com/ppoak/quanthub-plugins/releases) 选择 `ashare-backtest-strategy@版本号`，并按其说明选择兼容的 `base-strategy` 版本，在已有 uv 项目目录一起安装：
 
 ```sh
-uv add "base-strategy @ git+https://github.com/ppoak/quanthub-plugins.git#subdirectory=strategy-lab/skills/base-strategy" "ashare-backtest-strategy @ git+https://github.com/ppoak/quanthub-plugins.git#subdirectory=strategy-lab/skills/ashare-backtest-strategy" --tag "<tag>"
+uv add "base-strategy @ https://github.com/ppoak/quanthub-plugins/releases/download/base-strategy@<base-strategy-version>/base_strategy-<base-strategy-version>-py3-none-any.whl" "ashare-backtest-strategy @ https://github.com/ppoak/quanthub-plugins/releases/download/ashare-backtest-strategy@<ashare-backtest-strategy-version>/ashare_backtest_strategy-<ashare-backtest-strategy-version>-py3-none-any.whl"
 ```
 
-仅使用 Python 包无需安装插件。保留项目的 `pyproject.toml` 和 `uv.lock`，其他环境运行 `uv sync --locked`。不要重建已有环境或覆盖项目配置。
+将命令中的版本占位符替换为实际发布版本，不带 `v`；文件名以 Release 附件为准。两个包的版本分别选择，无需相同。仅使用 Python 包无需安装插件。保留项目的 `pyproject.toml` 和 `uv.lock`，其他环境运行 `uv sync --locked`。复用已有环境和配置。
 
 Excel 导出所需依赖见 [Base Strategy 安装说明](../base-strategy/SKILL.md#安装)。
 
