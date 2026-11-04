@@ -54,6 +54,6 @@ def calculate_factor(*, context: FactorCalculateContext) -> None:
 
 ## 运行依赖与职责边界
 
-Factor Protocol 随[插件依赖](../../../README.md#安装与环境)安装；在 QuantHub 仓库开发时使用 `uv sync`。
+在项目已有环境中按 [Factor Protocol 安装说明](../SKILL.md#安装)安装 Python 包。
 
 因子包从 `factor_protocol` 导入共享契约、路径、加载、注册、指纹、存储和公共产物接口。

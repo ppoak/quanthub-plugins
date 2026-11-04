@@ -5,7 +5,7 @@ description: 使用脚本物化因子历史数据，诊断并修复计算失败�
 
 # Factor Calculate
 
-运行前按[插件说明](../../README.md)准备项目环境。`<skill-root>` 指本 Skill 的安装目录，`<plugin-root>` 指插件根目录。
+运行前按 [Factor Protocol 安装说明](../factor-protocol/SKILL.md#安装)检查项目已有环境和依赖。`<path-to-skill>` 指本 Skill 的安装目录。
 
 `scripts/run_calculate.py` 自动完成分批计算、输出检查、数据身份提交和收尾独立复算。Agent 按需运行脚本，在计算失败时诊断和修复。
 
@@ -14,10 +14,10 @@ description: 使用脚本物化因子历史数据，诊断并修复计算失败�
 Review、Validate、Benchmark 通过后，在项目根目录使用项目虚拟环境运行。参数与用法以脚本帮助为准：
 
 ~~~shell
-.venv/Scripts/python "<skill-root>/scripts/run_calculate.py" --help
+uv run --locked python "<path-to-skill>/scripts/run_calculate.py" --help
 ~~~
 
-用 `--begin/--end` 指定输出区间，批次、线程和内存显式使用 Benchmark 选定配置。目录与完整历史范围配置见 [`.env.example`](../../.env.example)。
+用 `--begin/--end` 指定输出区间，批次、线程和内存显式使用 Benchmark 选定配置。目录与完整历史范围配置见 [`.env.example`](assets/.env.example)。
 
 ## 结果与验收
 

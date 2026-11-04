@@ -5,9 +5,19 @@ description: 提供因子共用接口、DuckDB Hive 存储、因子包加载和�
 
 # Factor Protocol
 
-运行前按[插件说明](../../README.md)准备项目环境。`<skill-root>` 指本 Skill 的安装目录，`<plugin-root>` 指插件根目录。
+优先使用项目已有的 Python 3.12+ 环境，按下文安装缺少的依赖。`<path-to-skill>` 指本 Skill 的安装目录。
 
-本技能提供因子包接口、路径解析、注册表读取、定义指纹、数据身份、DuckDB/Hive 数据访问和公共产物读写接口。Python 包随插件依赖安装；在 QuantHub 仓库中使用 `uv sync`。
+本技能提供因子包接口、路径解析、注册表读取、定义指纹、数据身份、DuckDB/Hive 数据访问和公共产物读写接口。
+
+## 安装
+
+先检查项目已有的 Python 包。缺少或需更新时，从 [Releases](https://github.com/ppoak/quanthub-plugins/releases) 选择 `factor-protocol@版本号`，在已有 uv 项目目录安装对应 wheel：
+
+```sh
+uv add "factor-protocol @ https://github.com/ppoak/quanthub-plugins/releases/download/factor-protocol@<factor-protocol-version>/factor_protocol-<factor-protocol-version>-py3-none-any.whl"
+```
+
+将命令中的版本占位符替换为实际发布版本，不带 `v`；文件名以 Release 附件为准。仅使用 Python 包无需安装插件。保留项目的 `pyproject.toml` 和 `uv.lock`，其他环境运行 `uv sync --locked`。复用已有环境和配置。
 
 ## 项目路径配置
 
@@ -20,7 +30,7 @@ DATA=data
 ARTIFACTS=artifacts
 ```
 
-相对路径以项目根目录为基准，绝对路径可用于共享存储。显式路径参数优先于进程环境变量，进程环境变量优先于 `.env`；未配置时使用默认值。仓库提供 `.env.example` 作为配置模板；项目 `.env` 保存实际路径。
+相对路径以项目根目录为基准，绝对路径可用于共享存储。显式路径参数优先于进程环境变量，进程环境变量优先于 `.env`；未配置时使用默认值。从[配置示例](assets/.env.example)中补充需要的设置到项目 `.env`，保留已有配置。
 
 `FACTORZOO_SCHEMA` 相对于 `FACTORZOO` 解析。数据与产物按以下结构存储：
 
@@ -53,7 +63,7 @@ ARTIFACTS=artifacts
 
 协议使用示例和可执行契约案例统一放在 `examples/`；每个案例既演示接口，也用断言核对行为。运行存储接口与数据身份案例：
 
-```powershell
-./.venv/Scripts/python "<skill-root>/examples/protocol_cases.py"
-./.venv/Scripts/python "<skill-root>/examples/identity_cases.py"
+```sh
+uv run --locked python "<path-to-skill>/examples/protocol_cases.py"
+uv run --locked python "<path-to-skill>/examples/identity_cases.py"
 ```

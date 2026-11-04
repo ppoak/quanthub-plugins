@@ -70,27 +70,27 @@ HUGGINGFACE_BACKUP_RETRY_SLEEP_SECONDS=60
 
 查看可用 bucket：
 
-```powershell
+```sh
 ./.venv/Scripts/hf buckets list --token <token>
 ```
 
 小范围 dry-run：
 
-```powershell
-./.venv/Scripts/python <skill-root>/scripts/huggingface/sync_huggingface_bucket.py --include-table eastmoney_intraday_changes --dry-run
+```sh
+uv run --locked python "<path-to-skill>/scripts/huggingface/sync_huggingface_bucket.py" --include-table eastmoney_intraday_changes --dry-run
 ```
 
 执行完整备份：
 
-```powershell
-./.venv/Scripts/python <skill-root>/scripts/huggingface/sync_huggingface_bucket.py
+```sh
+uv run --locked python "<path-to-skill>/scripts/huggingface/sync_huggingface_bucket.py"
 ```
 
 通过统一调度器预览或运行一次：
 
-```powershell
-./.venv/Scripts/python <skill-root>/scripts/scheduler.py --run-once huggingface_backup --dry-run
-./.venv/Scripts/python <skill-root>/scripts/scheduler.py --run-once huggingface_backup
+```sh
+uv run --locked python "<path-to-skill>/scripts/scheduler.py" --run-once huggingface_backup --dry-run
+uv run --locked python "<path-to-skill>/scripts/scheduler.py" --run-once huggingface_backup
 ```
 
 ## 调度与通知

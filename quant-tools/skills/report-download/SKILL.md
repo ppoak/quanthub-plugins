@@ -5,17 +5,19 @@ description: 根据报告来源调用对应脚本下载并校验研究报告 PDF
 
 # 报告下载
 
-属于 [Quant Tools](../../README.md)。环境准备见插件说明，配置模板见 [.env.example](../../.env.example)。下文 `<skill-root>` 指本 `SKILL.md` 所在目录，命令使用安装后的实际位置。
+复用项目已有的 Python 3.12+ 环境，无需额外安装 Python 库。将[配置示例](assets/.env.example)中所需项补充到项目 `.env`，保留已有设置。`<path-to-skill>` 指本 Skill 的安装目录。
+
+下载发现报告时，生成下载授权需要 OpenSSL 或 Node.js；也可直接使用授权下载地址。
 
 本 skill 根据报告来源选择下载脚本并校验 PDF。下载目录由项目根目录 `.env` 中的 `REPORT_DOWNLOAD_DIR` 配置；命令行 `--output-dir` 可为单次下载指定目录。项目根目录默认为当前目录，可通过 `--project-root` 指定；相对下载目录以该根目录为基准。参数优先级为命令行、进程环境变量、目标项目 `.env`、脚本默认值。
 
 在其他项目运行时，例如：
 
-```powershell
-.venv/Scripts/python <report-download-skill>/scripts/bigquant_download.py "<BigQuant URL>" --project-root <project_root>
+```sh
+uv run --locked python "<path-to-skill>/scripts/bigquant_download.py" "<BigQuant URL>" --project-root "<project-root>"
 ```
 
-下载脚本按来源保存在 `scripts/` 中。脚本和 CLI 提示使用英文，面向用户的说明使用中文。运行 Python 命令使用项目环境中的 `.venv/Scripts/python`。
+下载脚本按来源保存在 `scripts/` 中。脚本和 CLI 提示使用英文，面向用户的说明使用中文。从项目目录通过 `uv run --locked python` 使用已有环境运行。
 
 ## 来源选择
 
@@ -41,22 +43,16 @@ FXBG_USER_ID=<user_id>
 FXBG_USER_TOKEN=<user_token>
 ```
 
-```powershell
-.venv/Scripts/python <skill-root>/scripts/fxbaogao_download.py <report_id>
+```sh
+uv run --locked python "<path-to-skill>/scripts/fxbaogao_download.py" "<report_id>"
 ```
 
-下载受限时，使用用户提供的登录凭据或带 `auth_key` 的授权 PDF 地址。一次性凭据可以通过环境变量传入：
-
-```powershell
-$env:FXBG_USER_ID="<user_id>"
-$env:FXBG_USER_TOKEN="<user_token>"
-.venv/Scripts/python <skill-root>/scripts/fxbaogao_download.py <report_id>
-```
+下载受限时，使用用户提供的登录凭据或带 `auth_key` 的授权 PDF 地址。凭据保存在项目 `.env` 中，也可由运行环境传入。
 
 使用授权地址时，传入 `--auth-url`；`--output-dir` 可单次覆盖 `.env` 中的目录：
 
-```powershell
-.venv/Scripts/python <skill-root>/scripts/fxbaogao_download.py <report_id> --auth-url "<authorized_pdf_url>" --output-dir <下载目录>
+```sh
+uv run --locked python "<path-to-skill>/scripts/fxbaogao_download.py" "<report_id>" --auth-url "<authorized_pdf_url>" --output-dir "<output-directory>"
 ```
 
 脚本会校验 PDF 内容并打印保存路径。
@@ -65,8 +61,8 @@ $env:FXBG_USER_TOKEN="<user_token>"
 
 直接提供 BigQuant 文档页、PDF.js 查看器地址或 PDF 地址：
 
-```powershell
-.venv/Scripts/python <skill-root>/scripts/bigquant_download.py "<BigQuant 地址>"
+```sh
+uv run --locked python "<path-to-skill>/scripts/bigquant_download.py" "<BigQuant 地址>"
 ```
 
 脚本使用相同的 `REPORT_DOWNLOAD_DIR` 配置。运行时可用 `--output-dir` 指定本次下载目录。
@@ -79,8 +75,8 @@ $env:FXBG_USER_TOKEN="<user_token>"
 4. 在来源表中补充脚本和适用条件。
 5. 使用项目 Python 环境检查脚本语法：
 
-```powershell
-.venv/Scripts/python -m py_compile <skill-root>/scripts/<provider>_download.py
+```sh
+uv run --locked python -m py_compile "<path-to-skill>/scripts/<provider>_download.py"
 ```
 
 PDF、认证凭据和浏览器授权信息保存在本地；Git 版本中维护下载脚本和说明文档。

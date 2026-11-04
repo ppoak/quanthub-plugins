@@ -1,41 +1,38 @@
 # QuantHub Plugins
 
-面向 Coding Agent 的量化研究插件集，采用 Agent Plugins 格式，按需安装、独立使用。
+用于量化研究的三个插件，可按需安装，也可单独使用其中的 Python 包。
 
-| 插件 | 功能 |
-| --- | --- |
-| [Quant Tools](quant-tools/README.md) | 数据采集、维护、调度、备份与研究报告下载 |
-| [Factor Research](factor-research/README.md) | 因子研究、计算、验证、评估、发布、更新与模型合成 |
-| [Strategy Lab](strategy-lab/README.md) | 策略框架、本地 A 股回测、执行评估与东财模拟组合接入 |
+| 插件 | 用途 | 使用入口 |
+| --- | --- | --- |
+| Quant Tools | 采集、更新和备份数据，下载研究报告 | [数据维护](quant-tools/skills/database-maintenance/SKILL.md) · [报告下载](quant-tools/skills/report-download/SKILL.md) |
+| Factor Research | 开发、检验、评估和合成因子 | [因子研究](factor-research/skills/factor-workflow/SKILL.md) · [因子合成](factor-research/skills/factor-compose/SKILL.md) |
+| Strategy Lab | 编写策略、回测 A 股，连接东财模拟组合 | [策略基础](strategy-lab/skills/base-strategy/SKILL.md) · [A 股回测](strategy-lab/skills/ashare-backtest-strategy/SKILL.md) · [东财模拟组合](strategy-lab/skills/eastmoney-strategy/SKILL.md) |
 
-## 安装
+## 安装插件
 
-准备 Git 和支持插件安装的 Codex CLI，添加来源后安装所需插件：
+准备 Git 和 Codex CLI，在[发布列表](https://github.com/ppoak/quanthub-plugins/releases)中选择插件版本。标签统一使用 `对象名@版本号`，例如 `factor-research@0.1.0`，不加 `v`。示例名称不代表该版本已经发布。
 
-```sh
-codex plugin marketplace add https://github.com/ppoak/quanthub-plugins.git --ref main
-codex plugin add quant-tools@quanthub
-codex plugin add factor-research@quanthub
-codex plugin add strategy-lab@quanthub
-```
-
-新建会话后使用插件。其他支持 Agent Plugins 的客户端按各自方式安装。
-
-插件安装后，按对应 README 使用 Python 3.12+ 和 uv 准备目标项目环境，将所需配置写入目标项目 `.env`。数据、账号、因子源码和运行结果由使用者管理；本仓库提供通用工具及示例。
-
-## 目录与维护
-
-三个插件目录分别包含 `plugin.json`、`skills/`、Logo、依赖文件和配置示例。`.agents/plugins/marketplace.json` 登记插件，marketplace 标识为 `quanthub`。
-
-本地开发克隆本仓库，在对应插件中修改代码和文档。更新依赖时同步该插件的 `uv.lock`；验证脚本入口、接口示例及小样本流程后提交。插件可单独分发，引用路径均相对于插件目录。
-
-GitHub 来源更新后，刷新目录并重新安装所需插件：
+`<plugin-name>` 可填 `quant-tools`、`factor-research` 或 `strategy-lab`，`<plugin-version>` 填它的发布版本。以下命令可用于 Windows PowerShell、Linux 和 macOS：
 
 ```sh
-codex plugin marketplace upgrade quanthub
-codex plugin add factor-research@quanthub
+codex plugin marketplace add https://github.com/ppoak/quanthub-plugins.git --ref "<plugin-name>@<plugin-version>"
+codex plugin add "<plugin-name>@quanthub"
 ```
+
+安装其他插件时，分别选择版本并重复这两步；每次只安装所选插件。这里 `@quanthub` 表示插件来源，不是版本号。安装后新建会话使用。其他支持 Agent Plugins 的工具使用各自的安装入口。
+
+## 使用与更新
+
+按上表进入所需 Skill。安装说明、配置示例和运行方法均在 Skill 内，优先使用项目已有的 Python 环境，缺少依赖时再安装。仅使用 Python 包时，无需安装 Agent 或插件。
+
+把所需配置补充到自己项目的 `.env`，保留已有设置。数据、研究代码和运行结果也保存在自己的项目中。
+
+插件与 Python 包分别维护版本。Skill 文档或脚本变化时更新所属插件；Python 包内容变化时，更新该包和所属插件。未变化的包继续使用原版本。
+
+Python 包从各自 Release 的 wheel 附件安装，例如 `factor-protocol@0.1.0`。各 Skill 提供安装命令，包版本按对应发布说明选择，不必与插件版本相同。安装前确认所选版本已有对应标签和 wheel 附件。
+
+修改代码或依赖时，在对应 Skill 中维护和检查。发布时为合并后的版本创建新标签，已有标签保持不变。
 
 ## 许可证
 
-采用 [MIT License](LICENSE)。数据源、第三方服务和依赖软件适用其各自的授权及使用条件。
+采用 [MIT License](LICENSE)。数据源和第三方服务遵循各自的使用条件。

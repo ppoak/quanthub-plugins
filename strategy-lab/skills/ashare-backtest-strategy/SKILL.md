@@ -5,7 +5,19 @@ description: Build and validate deterministic local A-share backtests using next
 
 # A-share Backtest Strategy
 
-运行前按[插件说明](../../README.md)准备目标项目环境。`<skill-root>` 为本 Skill 的安装目录。
+复用项目已有的 Python 3.12+ 环境，按下文安装缺少的依赖。`<path-to-skill>` 为本 Skill 的安装目录。
+
+## 安装
+
+先检查项目已有的 Python 包。缺少或需更新时，从 [Releases](https://github.com/ppoak/quanthub-plugins/releases) 选择 `ashare-backtest-strategy@版本号`，并按其说明选择兼容的 `base-strategy` 版本，在已有 uv 项目目录一起安装：
+
+```sh
+uv add "base-strategy @ https://github.com/ppoak/quanthub-plugins/releases/download/base-strategy@<base-strategy-version>/base_strategy-<base-strategy-version>-py3-none-any.whl" "ashare-backtest-strategy @ https://github.com/ppoak/quanthub-plugins/releases/download/ashare-backtest-strategy@<ashare-backtest-strategy-version>/ashare_backtest_strategy-<ashare-backtest-strategy-version>-py3-none-any.whl"
+```
+
+将命令中的版本占位符替换为实际发布版本，不带 `v`；文件名以 Release 附件为准。两个包的版本分别选择，无需相同。仅使用 Python 包无需安装插件。保留项目的 `pyproject.toml` 和 `uv.lock`，其他环境运行 `uv sync --locked`。复用已有环境和配置。
+
+Excel 导出所需依赖见 [Base Strategy 安装说明](../base-strategy/SKILL.md#安装)。
 
 本 skill 提供本地 A 股历史回测后端，负责订单提交、下一 bar 撮合、T+1 与整手约束、费用和滑点、持仓估值、账本事实记录及回测评估。基于 `base-strategy` 的通用接口，使用 `AShareClient` 构建策略循环，由 `AShareExchange` 驱动撮合，并通过 `AShareLedger` 查询订单、成交和账户快照。
 
@@ -37,7 +49,7 @@ executions = ledger.executions
 
 [均线策略循环示例](examples/example_strategy_loop.py) 用确定性日线展示信号时点、下一 bar 成交、目标仓位和账本评估；[生命周期示例](examples/example_lifecycle.py) 与 [导出契约示例](examples/example_export_contracts.py) 检查 T+1、部分成交、自定义滑点、字段别名和成交回放。[条件单示例](examples/example_conditional_orders.py) 展示触发价格、成交量约束、止损限价后续成交、部分成交和订单有效期。示例均可运行：
 
-```powershell
-.venv/Scripts/python "<skill-root>/examples/example_strategy_loop.py"
-.venv/Scripts/python -m unittest discover -s "<skill-root>/examples" -p "example_*.py"
+```sh
+uv run --locked python "<path-to-skill>/examples/example_strategy_loop.py"
+uv run --locked python -m unittest discover -s "<path-to-skill>/examples" -p "example_*.py"
 ```

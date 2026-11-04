@@ -5,19 +5,19 @@ description: 使用脚本比较因子计算批次的耗时与峰值内存，诊�
 
 # Factor Benchmark
 
-运行前按[插件说明](../../README.md)准备项目环境。`<skill-root>` 指本 Skill 的安装目录，`<plugin-root>` 指插件根目录。
+运行前按 [Factor Protocol 安装说明](../factor-protocol/SKILL.md#安装)检查项目已有环境和依赖。`<path-to-skill>` 指本 Skill 的安装目录。
 
 `scripts/run_benchmark.py` 自动完成隔离计算、批次比较、单日追加测试、配置选择和 README 回写。Agent 按需运行脚本，在基准失败时诊断和修复。
 
 ## 脚本入口
 
-Review、Validate 通过后，在项目根目录激活项目虚拟环境。参数与用法以脚本帮助为准：
+Review、Validate 通过后，在项目根目录使用已有环境运行。参数与用法以脚本帮助为准：
 
 ~~~shell
-.venv/Scripts/python "<skill-root>/scripts/run_benchmark.py" --help
+uv run --locked python "<path-to-skill>/scripts/run_benchmark.py" --help
 ~~~
 
-一次调用完成全部候选与单日追加测试。候选使用相同的输出区间、线程和内存限制；运行前确认 `.env` 的 `FACTOR_WORKFLOW_NAME` 与目标因子一致，目录配置见 [`.env.example`](../../.env.example)。
+一次调用完成全部候选与单日追加测试。候选使用相同的输出区间、线程和内存限制；运行前确认 `.env` 的 `FACTOR_WORKFLOW_NAME` 与目标因子一致，目录配置见 [`.env.example`](assets/.env.example)。
 
 ## 结果与验收
 

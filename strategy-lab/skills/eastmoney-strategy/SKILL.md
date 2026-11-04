@@ -5,9 +5,21 @@ description: Build an EastMoney remote simulated-portfolio mirror using provider
 
 # EastMoney Strategy
 
-运行前按[插件说明](../../README.md)准备目标项目环境。`<skill-root>` 为本 Skill 的安装目录。
+复用项目已有的 Python 3.12+ 环境，按下文安装缺少的依赖。`<path-to-skill>` 为本 Skill 的安装目录。
 
-本 skill 提供东财模拟组合接入后端，负责刷新账户镜像、提交策略订单意图、同步平台订单与成交，并将已确认的交易事实记录到账本。账户、订单和成交状态以东财服务端返回为准。运行参数统一从项目根目录的 `.env` 读取；可配置项和默认值见[东财接入参考](references/eastmoney.md)。二维码登录使用 Python 标准库 HTTP；Excel 导出使用插件的 `excel` 依赖组。
+## 安装
+
+先检查项目已有的 Python 包。缺少或需更新时，从 [Releases](https://github.com/ppoak/quanthub-plugins/releases) 选择 `eastmoney-strategy@版本号`，并按其说明选择兼容的 `base-strategy` 版本，在已有 uv 项目目录一起安装：
+
+```sh
+uv add "base-strategy @ https://github.com/ppoak/quanthub-plugins/releases/download/base-strategy@<base-strategy-version>/base_strategy-<base-strategy-version>-py3-none-any.whl" "eastmoney-strategy @ https://github.com/ppoak/quanthub-plugins/releases/download/eastmoney-strategy@<eastmoney-strategy-version>/eastmoney_strategy-<eastmoney-strategy-version>-py3-none-any.whl"
+```
+
+将命令中的版本占位符替换为实际发布版本，不带 `v`；文件名以 Release 附件为准。两个包的版本分别选择，无需相同。仅使用 Python 包无需安装插件。保留项目的 `pyproject.toml` 和 `uv.lock`，其他环境运行 `uv sync --locked`。复用已有环境和配置。
+
+Excel 导出所需依赖见 [Base Strategy 安装说明](../base-strategy/SKILL.md#安装)。
+
+本 skill 提供东财模拟组合接入后端，负责刷新账户镜像、提交策略订单意图、同步平台订单与成交，并将已确认的交易事实记录到账本。账户、订单和成交状态以东财服务端返回为准。运行参数统一从项目根目录的 `.env` 读取；可配置项和默认值见[东财接入参考](references/eastmoney.md)。二维码登录使用 Python 标准库 HTTP。
 
 东财服务端负责接单和撮合。本地分别创建 `EMAccount`、`EMClient`、`EMExchange`、`EMLedger`，再注册并连接。通过 `exchange.account(account_id)` 刷新账户镜像；通过 Client 操作订单；Exchange 查询当日平台订单与成交，Ledger 保存终态订单和已确认成交。
 
@@ -22,6 +34,8 @@ exchange = EMExchange.from_env(dotenv_path=dotenv)
 exchange.register(account, ledger=ledger)
 client.connect(exchange, account_id=account.account_id)
 ```
+
+从[配置示例](assets/.env.example)中将所需项补充到项目 `.env`，保留已有设置。相对输出路径从运行目录计算。
 
 ## 接入东财模拟组合
 
@@ -59,9 +73,9 @@ for execution in exchange.fetch_executions(account_id=account_id):
 
 运行固定响应示例或检查示例行为：
 
-```powershell
-.venv/Scripts/python "<skill-root>/examples/example_mock_portfolio_loop.py"
-.venv/Scripts/python -m unittest discover -s "<skill-root>/examples" -p "example_*.py"
+```sh
+uv run --locked python "<path-to-skill>/examples/example_mock_portfolio_loop.py"
+uv run --locked python -m unittest discover -s "<path-to-skill>/examples" -p "example_*.py"
 ```
 
 认证、刷新与异常处理见 [东财后端参考](references/eastmoney.md)。

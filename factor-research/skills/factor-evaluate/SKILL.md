@@ -5,9 +5,11 @@ description: 评估因子包或已有评分数据，计算 IC、组合收益和�
 
 # Factor Evaluate
 
-运行前按[插件说明](../../README.md)准备项目环境。`<skill-root>` 指本 Skill 的安装目录，`<plugin-root>` 指插件根目录。
+运行前按 [Factor Protocol 安装说明](../factor-protocol/SKILL.md#安装)检查项目已有环境和依赖。`<path-to-skill>` 指本 Skill 的安装目录。
 
-在项目根目录使用 `.venv/Scripts/python` 运行 `scripts/run_evaluate.py`。参数默认读取 `.env`，命令行参数优先。完整参数见 `--help`，环境配置见[评估配置](references/evaluation-settings.md)。
+在项目根目录使用 `uv run --locked python` 运行 `scripts/run_evaluate.py`。参数默认读取 `.env`，命令行参数优先。完整参数见 `--help`，环境配置见[评估配置](references/evaluation-settings.md)。
+
+绘图需要 `matplotlib`，项目缺少时运行 `uv add "matplotlib>=3.9.0"`。默认设置见[配置示例](assets/.env.example)，只将需要调整的项写入项目 `.env`。
 
 ## 用法
 
@@ -38,16 +40,16 @@ description: 评估因子包或已有评分数据，计算 IC、组合收益和�
 
 ```sh
 # Evaluate a package, check results, plot and update its README.
-.venv/Scripts/python "<skill-root>/scripts/run_evaluate.py" --factor-package market_cap --operation evaluate --operation check --operation plot --operation readme
+uv run --locked python "<path-to-skill>/scripts/run_evaluate.py" --factor-package market_cap --operation evaluate --operation check --operation plot --operation readme
 
 # Calculate IC for an existing score column.
-.venv/Scripts/python "<skill-root>/scripts/run_evaluate.py" --factor-data artifacts/compositions/study/run_example/signals --factor-column score --task ic
+uv run --locked python "<path-to-skill>/scripts/run_evaluate.py" --factor-data artifacts/compositions/study/run_example/signals --factor-column score --task ic
 
 # Evaluate a score directory directly.
-.venv/Scripts/python "<skill-root>/scripts/run_evaluate.py" --factor-data artifacts/compositions/study/run_example/signals --factor-column score --output-dir artifacts/evaluations/run_example
+uv run --locked python "<path-to-skill>/scripts/run_evaluate.py" --factor-data artifacts/compositions/study/run_example/signals --factor-column score --output-dir artifacts/evaluations/run_example
 
 # Plot existing complete results.
-.venv/Scripts/python "<skill-root>/scripts/run_evaluate.py" --factor-data artifacts/compositions/study/run_example/signals --factor-column score --output-dir artifacts/evaluations/run_example --operation plot
+uv run --locked python "<path-to-skill>/scripts/run_evaluate.py" --factor-data artifacts/compositions/study/run_example/signals --factor-column score --output-dir artifacts/evaluations/run_example --operation plot
 ```
 
 ## 注意事项
