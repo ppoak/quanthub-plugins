@@ -17,7 +17,7 @@ Review、Validate、Benchmark 通过后，在项目根目录使用项目虚拟�
 uv run --locked python "<path-to-skill>/scripts/run_calculate.py" --help
 ~~~
 
-用 `--begin/--end` 指定输出区间，批次、线程和内存显式使用 Benchmark 选定配置。目录与完整历史范围配置见 [`.env.example`](.env.example)。
+用 `--begin/--end` 指定输出区间，批次、线程和内存显式使用 Benchmark 选定配置。目录与完整历史范围配置见 [`.env.example`](assets/.env.example)。
 
 ## 结果与验收
 
