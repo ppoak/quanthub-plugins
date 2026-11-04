@@ -1,32 +1,24 @@
 # Quant Tools
 
-提供两个量化研究工具：
+采集和维护研究数据，下载研究报告。
 
 | Skill | 用途 |
 | --- | --- |
-| [database-maintenance](skills/database-maintenance/SKILL.md) | 行情、财务、行业和社交数据的采集、分区更新、调度与备份 |
-| [report-download](skills/report-download/SKILL.md) | 按来源下载研究报告并校验 PDF |
+| [database-maintenance](skills/database-maintenance/SKILL.md) | 采集、更新、备份数据，定时运行任务 |
+| [report-download](skills/report-download/SKILL.md) | 下载研究报告并检查 PDF |
 
 ## 安装
 
-插件采用 [Agent Plugins 1.0](https://agent-plugins.org/) 格式，入口为根目录 `plugin.json`，两个 Skill 位于 `skills/`。插件包含全部脚本和参考文档，可单独分发 `quant-tools/` 目录。
-
-在 ChatGPT／Codex 的仓库插件目录中选择 QuantHub 下的 `quant-tools`。仓库登记文件为 `.agents/plugins/marketplace.json`；单独分发本插件时，在所用客户端登记插件目录。其他实现该标准的客户端使用各自的插件安装入口。
-
-从 [Tags](https://github.com/ppoak/quanthub-plugins/tags) 选择已发布版本，将所有 `<tag>` 替换为同一标签（如 `v0.1.0`，仅为格式示例）。以下命令适用于 Windows PowerShell、Linux 和 macOS 的常用 shell：
+准备 Git、Codex CLI、Python 3.12+ 和 uv。在[版本列表](https://github.com/ppoak/quanthub-plugins/tags)中选择版本，将所有 `<tag>` 替换为同一版本名称。以下命令可用于 Windows PowerShell、Linux 和 macOS：
 
 ```sh
 codex plugin marketplace add https://github.com/ppoak/quanthub-plugins.git --ref "<tag>"
 codex plugin add quant-tools@quanthub
 ```
 
-安装插件后，使用目标项目的 Python 环境执行脚本。下文 `<plugin-root>` 为安装后的插件目录，`<project-root>` 为保存配置和数据的项目目录，两者可位于不同位置。
+在自己的项目目录准备 Python 环境。新项目先运行 `uv init --bare --python 3.12`，再运行 `uv sync`。仅下载报告时，到此即可。
 
-## Python 环境
-
-使用 Python 3.12 或更新版本和 `uv`。仅下载报告无需额外 Python 依赖。新项目先运行 `uv init --bare --python 3.12`，再运行 `uv sync` 准备环境。
-
-数据库工具没有独立 Python 包，按安装插件时的同一标签获取源码和锁文件。`<source-root>` 使用独立的绝对路径；已有克隆时跳过 clone，先运行 `git -C "<source-root>" fetch origin --tags`：
+数据工具还需安装 Python 库。下载同一版本的代码，生成所需库的清单；将 `<source-root>` 替换为独立的绝对目录路径：
 
 ```sh
 git clone https://github.com/ppoak/quanthub-plugins.git "<source-root>"
@@ -34,23 +26,21 @@ git -C "<source-root>" checkout --detach "refs/tags/<tag>"
 uv export --project "<source-root>/quant-tools" --frozen --no-emit-project --no-hashes --output-file "<source-root>/quant-tools/requirements.txt"
 ```
 
-在目标项目目录导入这些固定版本依赖；新项目先运行 `uv init --bare --python 3.12`：
+已有下载目录时，跳过 clone，先运行 `git -C "<source-root>" fetch origin --tags`。然后在自己的项目目录安装：
 
 ```sh
 uv add -r "<source-root>/quant-tools/requirements.txt"
 ```
 
-RiceQuant 与 Hugging Face 备份分别在 `uv export` 中增加 `--group ricequant`、`--group backup`，也可同时指定。提交目标项目的 `pyproject.toml` 和 `uv.lock`，其他环境运行 `uv sync --locked`。升级时切换新标签，同时更新插件、重新导出并导入依赖。
+使用 RiceQuant 时，在 `uv export` 命令中增加 `--group ricequant`；使用 Hugging Face 备份时增加 `--group backup`，也可同时指定。
 
-下文通过 `uv run --locked python` 使用项目环境运行脚本，无需激活虚拟环境或区分平台路径。
+保留项目的 `pyproject.toml` 和 `uv.lock`，在其他机器运行 `uv sync --locked`。升级时选择新版本，重新安装插件、生成清单并安装 Python 库。
 
-RiceQuant 本地采集还需 Chrome、账号和服务器 notebook；发现报告签名需要 OpenSSL 或 Node.js，也可直接提供授权下载地址。来源要求见对应 Skill。
+## 配置与使用
 
-## 项目配置与运行
+将 [.env.example](.env.example) 中需要的设置写入项目 `.env`，填写数据目录、账号和任务设置。相对路径从项目目录计算；同名设置优先使用命令行，其次是环境变量，最后是 `.env`。
 
-将 [.env.example](.env.example) 中需要的设置写入目标项目 `.env`，填写数据目录、账号和任务设置。命令行参数优先于进程环境变量，进程环境变量优先于项目 `.env`；相对路径以目标项目为基准。
-
-查看调度任务：
+下文 `<plugin-root>` 是插件安装目录，`<project-root>` 是自己的项目目录，均替换为实际值。在自己的项目目录查看任务：
 
 ```sh
 uv run --locked python "<plugin-root>/skills/database-maintenance/scripts/scheduler.py" --project-root "<project-root>" --list-jobs
@@ -62,10 +52,10 @@ uv run --locked python "<plugin-root>/skills/database-maintenance/scripts/schedu
 uv run --locked python "<plugin-root>/skills/report-download/scripts/bigquant_download.py" "<report-url>" --project-root "<project-root>"
 ```
 
-数据、报告、日志、下载缓存和就绪标记保存在目标项目。长期调度使用同一脚本入口及 `--project-root`，由项目原有的服务或任务计划启动。
+数据、报告和日志保存在自己的项目中。定时运行可使用项目已有的任务计划，调用相同脚本。
 
-## 维护
+## 使用前注意
 
-修改对应 Skill 内的脚本和说明；更新依赖后，在插件目录运行 `uv lock` 并提交 `uv.lock`。插件版本记录在 `plugin.json` 与 `pyproject.toml` 中。
-
-发布前检查两个 Skill 的脚本 `--help`、调度清单、dry-run，以及临时目录中的小范围数据写入和报告下载。真实采集、远端备份和通知需按所用来源另行验证。
+- RiceQuant 采集需要 Chrome、账号和服务器 notebook。
+- 发现报告的下载授权需要 OpenSSL 或 Node.js，也可直接提供授权下载地址。
+- 首次采集、备份或发送通知前，按对应 Skill 检查配置并先做小范围试运行。

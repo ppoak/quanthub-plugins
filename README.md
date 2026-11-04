@@ -1,16 +1,16 @@
 # QuantHub Plugins
 
-面向 Coding Agent 的量化研究插件集，采用 Agent Plugins 格式，按需安装、独立使用。
+用于量化研究的三个插件，可按需安装，也可单独使用其中的 Python 包。
 
-| 插件 | 功能 |
+| 插件 | 用途 |
 | --- | --- |
-| [Quant Tools](quant-tools/README.md) | 数据采集、维护、调度、备份与研究报告下载 |
-| [Factor Research](factor-research/README.md) | 因子研究、计算、验证、评估、发布、更新与模型合成 |
-| [Strategy Lab](strategy-lab/README.md) | 策略框架、本地 A 股回测、执行评估与东财模拟组合接入 |
+| [Quant Tools](quant-tools/README.md) | 采集、更新和备份数据，下载研究报告 |
+| [Factor Research](factor-research/README.md) | 开发、检验、评估和合成因子 |
+| [Strategy Lab](strategy-lab/README.md) | 编写策略、回测 A 股，连接东财模拟组合 |
 
 ## 安装
 
-准备 Git 和支持插件安装的 Codex CLI。从 [Tags](https://github.com/ppoak/quanthub-plugins/tags) 选择已发布版本，将所有 `<tag>` 替换为同一标签（如 `v0.1.0`，仅为格式示例）。以下命令适用于 Windows PowerShell、Linux 和 macOS 的常用 shell：
+准备 Git 和 Codex CLI，在[版本列表](https://github.com/ppoak/quanthub-plugins/tags)中选择版本，将 `<tag>` 替换为对应名称，例如 `v0.1.0`。示例名称不代表该版本已发布。以下命令可用于 Windows PowerShell、Linux 和 macOS：
 
 ```sh
 codex plugin marketplace add https://github.com/ppoak/quanthub-plugins.git --ref "<tag>"
@@ -19,20 +19,18 @@ codex plugin add factor-research@quanthub
 codex plugin add strategy-lab@quanthub
 ```
 
-新建会话后使用插件。其他支持 Agent Plugins 的客户端按各自方式安装。
+只需执行所需插件的安装命令，随后新建会话使用。其他支持 Agent Plugins 的工具使用各自的安装入口。
 
-插件安装不会自动安装 Python 依赖。按对应 README，在目标项目使用 Python 3.12+ 和 uv 安装同一 tag 的 Python 包或锁定依赖；仅使用 Python 包无需安装 Agent。保存项目的 `pyproject.toml` 和 `uv.lock`，后续通过 `uv sync --locked` 复现环境。配置写入目标项目 `.env`。数据、账号、因子源码和运行结果由使用者管理；本仓库提供通用工具及示例。
+安装插件后，还需按对应 README 准备 Python 环境，插件与 Python 包选择同一版本。仅使用 Python 包时，无需安装 Agent 或插件。
 
-## 目录与维护
+## 使用与更新
 
-三个插件目录分别包含 `plugin.json`、`skills/`、Logo、依赖文件和配置示例。`.agents/plugins/marketplace.json` 登记插件，marketplace 标识为 `quanthub`。
+每个插件目录包含使用说明、`skills/` 工具及配置示例。把所需配置写入自己项目的 `.env`；数据、研究代码和运行结果也保存在自己的项目中。
 
-本地开发克隆本仓库，在对应插件中修改代码和文档。更新依赖时同步该插件的 `uv.lock`；验证脚本入口、接口示例及小样本流程后提交。插件可单独分发，引用路径均相对于插件目录。
+保留项目的 `pyproject.toml` 和 `uv.lock`，在其他机器运行 `uv sync --locked` 即可安装相同版本。升级时，将安装命令中的 `<tag>` 换成新版本，同时更新插件和 Python 包。
 
-升级时将安装命令中的 `<tag>` 替换为新版本，同时更新插件和 Python 依赖。维护者为已合并版本创建标签；已发布标签保持不变，后续修改使用新标签。`uv.lock` 记录标签对应的具体提交。
-
-本地开发可使用 editable 安装；各插件的 `pyproject.toml` 与 `uv.lock` 保留开发环境配置，用户安装以 README 为准。
+修改插件时，在对应目录开发和检查；修改 Python 依赖后运行 `uv lock`。发布时为合并后的版本创建新标签，已有标签保持不变。
 
 ## 许可证
 
-采用 [MIT License](LICENSE)。数据源、第三方服务和依赖软件适用其各自的授权及使用条件。
+采用 [MIT License](LICENSE)。数据源和第三方服务遵循各自的使用条件。

@@ -1,52 +1,48 @@
 # Factor Research
 
-提供因子研究、计算、验证、评估、合成、发布和增量更新。读取目标项目中已有的数据。
+从项目已有数据出发，完成因子设计、开发、检验、评估和合成。
 
-## Skills
+## 工具
 
 | Skill | 用途 |
 | --- | --- |
-| [factor-workflow](skills/factor-workflow/SKILL.md) | 研究流程与阶段交接 |
-| [factor-protocol](skills/factor-protocol/SKILL.md) | 公共 Python 接口、数据读取和产物路径 |
-| [factor-design](skills/factor-design/SKILL.md) | 因子定义与研究 README |
-| [factor-develop](skills/factor-develop/SKILL.md) | SQL 计算与独立 Python 复算 |
-| [factor-review](skills/factor-review/SKILL.md) | 实现、时间可见性和计算独立性审查 |
-| [factor-validate](skills/factor-validate/SKILL.md) | 抽样独立验证 |
-| [factor-benchmark](skills/factor-benchmark/SKILL.md) | 计算批次与资源比较 |
-| [factor-calculate](skills/factor-calculate/SKILL.md) | 完整历史计算 |
-| [factor-evaluate](skills/factor-evaluate/SKILL.md) | IC、组合收益与相关性 |
-| [factor-improve](skills/factor-improve/SKILL.md) | 评估分析与构造改进 |
-| [factor-compose](skills/factor-compose/SKILL.md) | 数据准备、模型训练和评分保存 |
-| [factor-publish](skills/factor-publish/SKILL.md) | 评估资产发布和研究记录同步 |
-| [factor-update](skills/factor-update/SKILL.md) | 按现有数据增量更新 active 因子 |
+| [factor-workflow](skills/factor-workflow/SKILL.md) | 安排研究步骤 |
+| [factor-protocol](skills/factor-protocol/SKILL.md) | 共用接口和数据读写 |
+| [factor-design](skills/factor-design/SKILL.md) | 定义因子，编写研究说明 |
+| [factor-develop](skills/factor-develop/SKILL.md) | 编写计算代码和独立复算代码 |
+| [factor-review](skills/factor-review/SKILL.md) | 审查计算逻辑和数据使用时间 |
+| [factor-validate](skills/factor-validate/SKILL.md) | 抽样复算，核对结果 |
+| [factor-benchmark](skills/factor-benchmark/SKILL.md) | 比较计算速度和内存用量 |
+| [factor-calculate](skills/factor-calculate/SKILL.md) | 计算历史因子数据 |
+| [factor-evaluate](skills/factor-evaluate/SKILL.md) | 评估预测效果、组合收益和相关性 |
+| [factor-improve](skills/factor-improve/SKILL.md) | 分析结果，提出改进方向 |
+| [factor-compose](skills/factor-compose/SKILL.md) | 训练合成模型，保存评分 |
+| [factor-publish](skills/factor-publish/SKILL.md) | 发布研究说明和评估结果 |
+| [factor-update](skills/factor-update/SKILL.md) | 随数据更新因子 |
 
-## 安装与环境
+## 安装
 
-插件采用 Agent Plugins 1.0 格式，可单独分发本目录。从 [Tags](https://github.com/ppoak/quanthub-plugins/tags) 选择已发布版本，将所有 `<tag>` 替换为同一标签（如 `v0.1.0`，仅为格式示例）。以下命令适用于 Windows PowerShell、Linux 和 macOS 的常用 shell：
+准备 Git、Codex CLI、Python 3.12+ 和 uv。在[版本列表](https://github.com/ppoak/quanthub-plugins/tags)中选择版本，将所有 `<tag>` 替换为同一版本名称。以下命令可用于 Windows PowerShell、Linux 和 macOS：
 
 ```sh
 codex plugin marketplace add https://github.com/ppoak/quanthub-plugins.git --ref "<tag>"
 codex plugin add factor-research@quanthub
 ```
 
-下文 `<plugin-root>` 为安装后的插件目录，`<project-root>` 为保存配置、数据、因子源码和产物的项目目录。Skill 文档中的 `<skill-root>` 指该 Skill 的实际安装目录。
-
-使用 Python 3.12 或更新版本和 `uv`。在目标项目目录执行以下命令；新项目先运行 `uv init --bare --python 3.12`：
+在自己的项目目录安装 Python 包。新项目先运行 `uv init --bare --python 3.12`：
 
 ```sh
 uv add "factor-protocol @ git+https://github.com/ppoak/quanthub-plugins.git#subdirectory=factor-research/skills/factor-protocol" "factor-compose @ git+https://github.com/ppoak/quanthub-plugins.git#subdirectory=factor-research/skills/factor-compose" --tag "<tag>"
 uv add "matplotlib>=3.9.0"
 ```
 
-两个 Python 包从指定标签构建并安装到项目 `.venv`。只需公共接口时，可仅安装同一标签的 `factor-protocol`；安装 Python 包无需 Agent 或插件。
+仅使用 Python 包可跳过插件安装；只需共用接口时，可仅安装 `factor-protocol`。合成模型所需的额外库按模型安装。发布到 GitHub 还需 GitHub CLI 和已授权账号。
 
-提交目标项目的 `pyproject.toml` 和 `uv.lock`，其他环境运行 `uv sync --locked`。第三方依赖以目标项目的锁文件为准。升级时将 `<tag>` 替换为新版本，同时更新插件和 Python 包。
+保留项目的 `pyproject.toml` 和 `uv.lock`，在其他机器运行 `uv sync --locked`。升级时，使用新版本重新执行插件和 Python 包的安装命令。
 
-合成模型需要的额外库按模型实现安装。发布和同步 GitHub 记录还需 Git、GitHub CLI 及已授权账号。
+## 配置
 
-## 项目配置与数据
-
-将 [.env.example](.env.example) 中需要的设置写入目标项目 `.env`：
+将 [.env.example](.env.example) 中需要的设置写入项目 `.env`：
 
 ```dotenv
 DATA=data
@@ -55,30 +51,38 @@ FACTORZOO=factor_zoo
 FACTORZOO_SCHEMA=schema.yaml
 ```
 
-相对路径以目标项目为基准。命令行路径参数优先于进程环境变量，进程环境变量优先于 `.env`。数据、因子源码和研究产物均保存在目标项目。
+以上分别指定原始数据、运行结果、因子代码和因子清单的位置。相对路径从项目目录计算；同名设置优先使用命令行，其次是环境变量，最后是 `.env`。
 
-开始研究时，从 `DATA` 查看实际表目录、分区、字段和有界样本，再选择数据与计算区间。读取方式见[数据访问说明](skills/factor-protocol/references/data-access.md)。具体因子的 README 记录所用字段、单位、关联方式和可见时间；字段含义不明确时先确认依据。
+研究前先查看实际数据和少量样本，确认字段、日期范围及数据何时可用。方法见[数据读取说明](skills/factor-protocol/references/data-access.md)。
 
-## 运行
+## 使用
 
-从目标项目目录通过 `uv run --locked python` 使用项目环境运行脚本，无需激活虚拟环境或区分平台路径；显式传入 `--project-root`：
+下文 `<plugin-root>` 是插件安装目录，`<project-root>` 是自己的项目目录，`<factor_name>` 是因子包名；均替换为实际值。各 Skill 中的 `<skill-root>` 是该 Skill 的安装目录。
+
+在自己的项目目录运行。评估一个因子包：
 
 ```sh
 uv run --locked python "<plugin-root>/skills/factor-evaluate/scripts/run_evaluate.py" --project-root "<project-root>" --factor-package "<factor_name>" --operation evaluate --operation check --operation plot --operation readme
+```
+
+评估合成评分：
+
+```sh
 uv run --locked python "<plugin-root>/skills/factor-evaluate/scripts/run_evaluate.py" --project-root "<project-root>" --factor-data artifacts/compositions/study/run_example/signals --factor-column score
+```
+
+查看因子更新计划或运行合成模型：
+
+```sh
 uv run --locked python "<plugin-root>/skills/factor-update/scripts/run_update.py" --project-root "<project-root>" --all --dry-run
 uv run --locked python -m factor_compose --config config/workflow.yaml
 ```
 
-标准因子包按 Design → Develop → Review → Validate → Benchmark → Calculate → Evaluate 执行；发布由用户决定。合成评分直接交给 Evaluate，使用 `--factor-data` 指定评分目录。
+因子研究依次完成设计、开发、审查、验证、性能检查、历史计算和评估；发布由用户决定。合成评分可直接评估。因子更新取决于已有数据；评估收益还需等待持有期结束后的行情。
 
-Update 以因子实际使用的数据分区和日历确定新增日期，由项目调度器按需调用。评估还需要持有期结束后的行情，其可评估尾日可能早于因子尾日。
+## 常见问题
 
-## 问题处理与维护
-
-- 无法导入公共包：检查当前 Python 环境和项目中记录的 Git 提交，运行 `uv sync --locked`。
-- 表或字段不存在：查看实际目录、字段及样本，按因子定义调整实现。
-- 没有新增输出：检查因子使用的数据范围、预热期和现有输出日期。
-- 验证、评估或历史一致性检查失败：按对应 Skill 查看终端和产物中的失败记录。
-
-修改依赖后更新插件 `uv.lock`；插件版本记录在 `plugin.json` 和 `pyproject.toml`。发布前检查脚本启动、公共接口案例，以及独立项目中的小样本计算、验证、评估和更新。
+- Python 包无法导入：在项目目录运行 `uv sync --locked`。
+- 缺少表或字段：检查实际数据，并核对因子说明。
+- 没有新增结果：检查数据日期、计算所需历史长度和已有结果。
+- 验证或评估失败：查看终端报错，并按对应 Skill 排查。
