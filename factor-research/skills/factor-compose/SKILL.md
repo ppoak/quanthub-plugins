@@ -11,13 +11,15 @@ description: 准备因子数据、训练合成模型并保存评分，使用 Fac
 
 ## 安装
 
-先检查项目已有的 `factor_compose` 和 `factor_protocol`，缺少或需更新版本时，在已有 uv 项目目录安装同一版本。将 `<tag>` 替换为所用插件的版本标签：
+先检查项目已有的 Python 包。缺少或需更新时，从 [Releases](https://github.com/ppoak/quanthub-plugins/releases) 选择 `factor-compose@版本号`，并按其说明选择兼容的 `factor-protocol` 版本，在已有 uv 项目目录一起安装：
 
 ```sh
-uv add "factor-protocol @ git+https://github.com/ppoak/quanthub-plugins.git#subdirectory=factor-research/skills/factor-protocol" "factor-compose @ git+https://github.com/ppoak/quanthub-plugins.git#subdirectory=factor-research/skills/factor-compose" --tag "<tag>"
+uv add "factor-protocol @ https://github.com/ppoak/quanthub-plugins/releases/download/factor-protocol@<factor-protocol-version>/factor_protocol-<factor-protocol-version>-py3-none-any.whl" "factor-compose @ https://github.com/ppoak/quanthub-plugins/releases/download/factor-compose@<factor-compose-version>/factor_compose-<factor-compose-version>-py3-none-any.whl"
 ```
 
-额外的模型库按所用模型安装。项目路径见 [Factor Protocol](../factor-protocol/SKILL.md#项目路径配置)，仅补充所需配置。仅使用 Python 包无需安装插件。
+将命令中的版本占位符替换为实际发布版本，不带 `v`；文件名以 Release 附件为准。两个包的版本分别选择，无需相同。仅使用 Python 包无需安装插件。保留项目的 `pyproject.toml` 和 `uv.lock`，其他环境运行 `uv sync --locked`。复用已有环境和配置。
+
+额外的模型库按所用模型安装。项目路径见 [Factor Protocol](../factor-protocol/SKILL.md#项目路径配置)，仅补充所需配置。
 
 ## 用法
 
