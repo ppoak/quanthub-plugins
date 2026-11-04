@@ -22,14 +22,15 @@ uv add -r "<path-to-skill>/requirements/backup.txt"
 
 两条命令分别用于 RiceQuant 和 Hugging Face 备份。RiceQuant 还需本机 Chrome、账号和服务器 notebook。无需重新下载插件或创建环境。
 
-从[配置示例](.env.example)中将所需项补充到项目 `.env`，保留已有路径、账号和任务设置。
+从[配置示例](assets/.env.example)中将所需项补充到项目 `.env`，保留已有路径、账号和任务设置。
 
 ## 目录结构
 
 ```text
 <path-to-skill>/
 ├── SKILL.md
-├── .env.example
+├── assets/
+│   └── .env.example
 ├── requirements/
 │   ├── base.txt
 │   ├── ricequant.txt
