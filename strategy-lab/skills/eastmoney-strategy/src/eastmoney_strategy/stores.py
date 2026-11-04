@@ -14,8 +14,7 @@ def to_excel(account, ledger, path: str) -> None:
     order sheets. Call ``exchange.account(account_id)`` for account and holdings.
     Historical terminal orders can be fetched through ``ledger.fetch_orders()``.
 
-    ``openpyxl`` is required. Install it with ``base-strategy[excel]``
-    or ``uv sync --extra trader``.
+    ``openpyxl`` is required. Install the ``excel`` extra of ``base-strategy``.
     """
     with pd.ExcelWriter(path, engine="openpyxl") as writer:
         pd.DataFrame(

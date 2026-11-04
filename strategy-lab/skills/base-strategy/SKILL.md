@@ -5,11 +5,21 @@ description: 提供策略框架的核心模型、四层契约、成交事实存�
 
 # Base Strategy
 
-运行前按[插件说明](../../README.md)准备目标项目环境。`<skill-root>` 为本 Skill 的安装目录。
+复用项目已有的 Python 3.12+ 环境，按下文安装缺少的依赖。`<skill-root>` 为本 Skill 的安装目录。
 
 本 skill 说明策略运行所需的基础模型、Account／Client／Exchange／Ledger 四层契约、订单与成交事实存储，以及基于成交记录的执行评估。
 
-Python 包随插件依赖安装；Excel 导出使用插件的 `excel` 依赖组。
+## 安装
+
+先检查项目是否已有所需包，缺少或需更新版本时，在已有 uv 项目目录运行。将 `<tag>` 替换为所用插件的版本标签：
+
+```sh
+uv add "base-strategy @ git+https://github.com/ppoak/quanthub-plugins.git#subdirectory=strategy-lab/skills/base-strategy" --tag "<tag>"
+```
+
+仅使用 Python 包无需安装插件。保留项目的 `pyproject.toml` 和 `uv.lock`，其他环境运行 `uv sync --locked`。不要重建已有环境或覆盖项目配置。
+
+需要 Excel 导出时，将安装命令中的 `base-strategy @` 改为 `base-strategy[excel] @`。
 
 ## 核心契约
 
@@ -32,6 +42,6 @@ Strategy -> Client -> Exchange -> Account
 
 [订单、成交与评估示例](examples/example_store_evaluation.py) 展示如何记录基础模型、去重成交事实，并从成交序列重建净值：
 
-```powershell
-.venv/Scripts/python -m unittest discover -s "<skill-root>/examples" -p "example_*.py"
+```sh
+uv run --locked python -m unittest discover -s "<skill-root>/examples" -p "example_*.py"
 ```
