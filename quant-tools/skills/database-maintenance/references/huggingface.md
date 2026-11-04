@@ -77,20 +77,20 @@ HUGGINGFACE_BACKUP_RETRY_SLEEP_SECONDS=60
 小范围 dry-run：
 
 ```sh
-uv run --locked python "<skill-root>/scripts/huggingface/sync_huggingface_bucket.py" --include-table eastmoney_intraday_changes --dry-run
+uv run --locked python "<path-to-skill>/scripts/huggingface/sync_huggingface_bucket.py" --include-table eastmoney_intraday_changes --dry-run
 ```
 
 执行完整备份：
 
 ```sh
-uv run --locked python "<skill-root>/scripts/huggingface/sync_huggingface_bucket.py"
+uv run --locked python "<path-to-skill>/scripts/huggingface/sync_huggingface_bucket.py"
 ```
 
 通过统一调度器预览或运行一次：
 
 ```sh
-uv run --locked python "<skill-root>/scripts/scheduler.py" --run-once huggingface_backup --dry-run
-uv run --locked python "<skill-root>/scripts/scheduler.py" --run-once huggingface_backup
+uv run --locked python "<path-to-skill>/scripts/scheduler.py" --run-once huggingface_backup --dry-run
+uv run --locked python "<path-to-skill>/scripts/scheduler.py" --run-once huggingface_backup
 ```
 
 ## 调度与通知

@@ -5,7 +5,7 @@ description: 根据报告来源调用对应脚本下载并校验研究报告 PDF
 
 # 报告下载
 
-复用项目已有的 Python 3.12+ 环境，无需额外安装 Python 库。将[配置示例](.env.example)中所需项补充到项目 `.env`，保留已有设置。`<skill-root>` 指本 Skill 的安装目录。
+复用项目已有的 Python 3.12+ 环境，无需额外安装 Python 库。将[配置示例](.env.example)中所需项补充到项目 `.env`，保留已有设置。`<path-to-skill>` 指本 Skill 的安装目录。
 
 下载发现报告时，生成下载授权需要 OpenSSL 或 Node.js；也可直接使用授权下载地址。
 
@@ -14,7 +14,7 @@ description: 根据报告来源调用对应脚本下载并校验研究报告 PDF
 在其他项目运行时，例如：
 
 ```sh
-uv run --locked python "<skill-root>/scripts/bigquant_download.py" "<BigQuant URL>" --project-root "<project-root>"
+uv run --locked python "<path-to-skill>/scripts/bigquant_download.py" "<BigQuant URL>" --project-root "<project-root>"
 ```
 
 下载脚本按来源保存在 `scripts/` 中。脚本和 CLI 提示使用英文，面向用户的说明使用中文。从项目目录通过 `uv run --locked python` 使用已有环境运行。
@@ -44,7 +44,7 @@ FXBG_USER_TOKEN=<user_token>
 ```
 
 ```sh
-uv run --locked python "<skill-root>/scripts/fxbaogao_download.py" "<report_id>"
+uv run --locked python "<path-to-skill>/scripts/fxbaogao_download.py" "<report_id>"
 ```
 
 下载受限时，使用用户提供的登录凭据或带 `auth_key` 的授权 PDF 地址。凭据保存在项目 `.env` 中，也可由运行环境传入。
@@ -52,7 +52,7 @@ uv run --locked python "<skill-root>/scripts/fxbaogao_download.py" "<report_id>"
 使用授权地址时，传入 `--auth-url`；`--output-dir` 可单次覆盖 `.env` 中的目录：
 
 ```sh
-uv run --locked python "<skill-root>/scripts/fxbaogao_download.py" "<report_id>" --auth-url "<authorized_pdf_url>" --output-dir "<output-directory>"
+uv run --locked python "<path-to-skill>/scripts/fxbaogao_download.py" "<report_id>" --auth-url "<authorized_pdf_url>" --output-dir "<output-directory>"
 ```
 
 脚本会校验 PDF 内容并打印保存路径。
@@ -62,7 +62,7 @@ uv run --locked python "<skill-root>/scripts/fxbaogao_download.py" "<report_id>"
 直接提供 BigQuant 文档页、PDF.js 查看器地址或 PDF 地址：
 
 ```sh
-uv run --locked python "<skill-root>/scripts/bigquant_download.py" "<BigQuant 地址>"
+uv run --locked python "<path-to-skill>/scripts/bigquant_download.py" "<BigQuant 地址>"
 ```
 
 脚本使用相同的 `REPORT_DOWNLOAD_DIR` 配置。运行时可用 `--output-dir` 指定本次下载目录。
@@ -76,7 +76,7 @@ uv run --locked python "<skill-root>/scripts/bigquant_download.py" "<BigQuant �
 5. 使用项目 Python 环境检查脚本语法：
 
 ```sh
-uv run --locked python -m py_compile "<skill-root>/scripts/<provider>_download.py"
+uv run --locked python -m py_compile "<path-to-skill>/scripts/<provider>_download.py"
 ```
 
 PDF、认证凭据和浏览器授权信息保存在本地；Git 版本中维护下载脚本和说明文档。

@@ -55,20 +55,20 @@ RiceQuant 服务器导出带数据集前缀的 Parquet 文件，并组成 `data.
 完整本地更新：
 
 ```shell
-uv run --locked python "<skill-root>/scripts/ricequant/fetch_ricequant.py"
+uv run --locked python "<path-to-skill>/scripts/ricequant/fetch_ricequant.py"
 ```
 
 导入已下载的数据包：
 
 ```shell
-uv run --locked python -c "import runpy; module=runpy.run_path('"<skill-root>/scripts/ricequant/fetch_ricequant.py');" module['dump_data']('downloads/data.tar.gz', 'data')"
+uv run --locked python -c "import runpy; module=runpy.run_path('<path-to-skill>/scripts/ricequant/fetch_ricequant.py'); module['dump_data']('downloads/data.tar.gz', 'data')"
 ```
 
 统一调度器清单与 dry-run：
 
 ```shell
-uv run --locked python "<skill-root>/scripts/scheduler.py" --list-jobs
-uv run --locked python "<skill-root>/scripts/scheduler.py" --run-once ricequant --date 2026-06-04 --dry-run
+uv run --locked python "<path-to-skill>/scripts/scheduler.py" --list-jobs
+uv run --locked python "<path-to-skill>/scripts/scheduler.py" --run-once ricequant --date 2026-06-04 --dry-run
 ```
 
 DuckDB 查询最近日期分区：
