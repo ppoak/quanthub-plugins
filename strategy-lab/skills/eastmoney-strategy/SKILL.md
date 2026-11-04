@@ -35,7 +35,7 @@ exchange.register(account, ledger=ledger)
 client.connect(exchange, account_id=account.account_id)
 ```
 
-从[配置示例](.env.example)中将所需项补充到项目 `.env`，保留已有设置。相对输出路径从运行目录计算。
+从[配置示例](assets/.env.example)中将所需项补充到项目 `.env`，保留已有设置。相对输出路径从运行目录计算。
 
 ## 接入东财模拟组合
 
