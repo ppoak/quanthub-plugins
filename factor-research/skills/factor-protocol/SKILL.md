@@ -11,13 +11,13 @@ description: 提供因子共用接口、DuckDB Hive 存储、因子包加载和�
 
 ## 安装
 
-先检查项目是否已有 `factor_protocol`，缺少或需更新版本时，在已有 uv 项目目录运行。将 `<tag>` 替换为所用插件的版本标签：
+先检查项目已有的 Python 包。缺少或需更新时，从 [Releases](https://github.com/ppoak/quanthub-plugins/releases) 选择 `factor-protocol@版本号`，在已有 uv 项目目录安装对应 wheel：
 
 ```sh
-uv add "factor-protocol @ git+https://github.com/ppoak/quanthub-plugins.git#subdirectory=factor-research/skills/factor-protocol" --tag "<tag>"
+uv add "factor-protocol @ https://github.com/ppoak/quanthub-plugins/releases/download/factor-protocol@<factor-protocol-version>/factor_protocol-<factor-protocol-version>-py3-none-any.whl"
 ```
 
-仅使用 Python 包无需安装插件。保留项目的 `pyproject.toml` 和 `uv.lock`，其他环境运行 `uv sync --locked`。不要重建已有环境或覆盖项目配置。
+将命令中的版本占位符替换为实际发布版本，不带 `v`；文件名以 Release 附件为准。仅使用 Python 包无需安装插件。保留项目的 `pyproject.toml` 和 `uv.lock`，其他环境运行 `uv sync --locked`。复用已有环境和配置。
 
 ## 项目路径配置
 
