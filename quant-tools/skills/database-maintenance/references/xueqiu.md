@@ -60,22 +60,22 @@ XUEQIU_STATUS_CANDIDATE_LIMIT=200
 
 ## 小范围采集
 
-```powershell
-./.venv/Scripts/python <skill-root>/scripts/xueqiu/fetch_xueqiu_social_count.py --date 2026-06-02 --codes 002384.SZ --data-root data --table-name xueqiu_social_count_test --workers 1 --sleep 0 --timeout 20 --retries 0
-./.venv/Scripts/python <skill-root>/scripts/xueqiu/fetch_xueqiu_hot_rank.py --date 2026-06-02 --data-root data --table-name xueqiu_hot_rank_test --timeout 20 --retries 0 --hot-size 5 --hot-rank-types 12
-./.venv/Scripts/python <skill-root>/scripts/xueqiu/fetch_xueqiu_status.py --date 2026-06-01 --codes 688008.SH --data-root data --table-name xueqiu_status_test --workers 1 --batch-size 1 --count 20 --max-pages 1 --sleep 0 --timeout 20 --retries 0
-./.venv/Scripts/python <skill-root>/scripts/xueqiu/fetch_xueqiu_cube_rebalance.py --date 2026-06-02 --codes 002384.SZ --data-root data --table-name xueqiu_cube_rebalance_test --workers 1 --sleep 0 --timeout 20 --retries 0
+```sh
+uv run --locked python "<skill-root>/scripts/xueqiu/fetch_xueqiu_social_count.py" --date 2026-06-02 --codes 002384.SZ --data-root data --table-name xueqiu_social_count_test --workers 1 --sleep 0 --timeout 20 --retries 0
+uv run --locked python "<skill-root>/scripts/xueqiu/fetch_xueqiu_hot_rank.py" --date 2026-06-02 --data-root data --table-name xueqiu_hot_rank_test --timeout 20 --retries 0 --hot-size 5 --hot-rank-types 12
+uv run --locked python "<skill-root>/scripts/xueqiu/fetch_xueqiu_status.py" --date 2026-06-01 --codes 688008.SH --data-root data --table-name xueqiu_status_test --workers 1 --batch-size 1 --count 20 --max-pages 1 --sleep 0 --timeout 20 --retries 0
+uv run --locked python "<skill-root>/scripts/xueqiu/fetch_xueqiu_cube_rebalance.py" --date 2026-06-02 --codes 002384.SZ --data-root data --table-name xueqiu_cube_rebalance_test --workers 1 --sleep 0 --timeout 20 --retries 0
 ```
 
 验证结束后，清理 `_test` 数据表。
 
 ## 正式运行参数
 
-```powershell
-./.venv/Scripts/python <skill-root>/scripts/xueqiu/fetch_xueqiu_social_count.py --date <YYYY-MM-DD> --data-root data --table-name xueqiu_social_count --workers 2 --sleep 0.2 --timeout 30 --retries 2 --failure-retry-rounds 1 --failure-retry-workers 1 --failure-retry-sleep 1.0 --failure-retry-timeout 30 --failure-retry-retries 3
-./.venv/Scripts/python <skill-root>/scripts/xueqiu/fetch_xueqiu_hot_rank.py --date <YYYY-MM-DD> --data-root data --table-name xueqiu_hot_rank --timeout 20 --retries 1 --hot-rank-types 12 22
-./.venv/Scripts/python <skill-root>/scripts/xueqiu/fetch_xueqiu_status.py --date <YYYY-MM-DD> --data-root data --table-name xueqiu_status --workers 1 --batch-size 10 --sleep 2 --timeout 30 --retries 2 --candidate-limit 500
-./.venv/Scripts/python <skill-root>/scripts/xueqiu/fetch_xueqiu_cube_rebalance.py --date <YYYY-MM-DD> --data-root data --table-name xueqiu_cube_rebalance --workers 2 --sleep 0.2 --timeout 20 --retries 1 --failure-retry-rounds 1 --failure-retry-workers 1 --failure-retry-sleep 2.0 --failure-retry-timeout 30 --failure-retry-retries 5
+```sh
+uv run --locked python "<skill-root>/scripts/xueqiu/fetch_xueqiu_social_count.py" --date <YYYY-MM-DD> --data-root data --table-name xueqiu_social_count --workers 2 --sleep 0.2 --timeout 30 --retries 2 --failure-retry-rounds 1 --failure-retry-workers 1 --failure-retry-sleep 1.0 --failure-retry-timeout 30 --failure-retry-retries 3
+uv run --locked python "<skill-root>/scripts/xueqiu/fetch_xueqiu_hot_rank.py" --date <YYYY-MM-DD> --data-root data --table-name xueqiu_hot_rank --timeout 20 --retries 1 --hot-rank-types 12 22
+uv run --locked python "<skill-root>/scripts/xueqiu/fetch_xueqiu_status.py" --date <YYYY-MM-DD> --data-root data --table-name xueqiu_status --workers 1 --batch-size 10 --sleep 2 --timeout 30 --retries 2 --candidate-limit 500
+uv run --locked python "<skill-root>/scripts/xueqiu/fetch_xueqiu_cube_rebalance.py" --date <YYYY-MM-DD> --data-root data --table-name xueqiu_cube_rebalance --workers 2 --sleep 0.2 --timeout 20 --retries 1 --failure-retry-rounds 1 --failure-retry-workers 1 --failure-retry-sleep 2.0 --failure-retry-timeout 30 --failure-retry-retries 5
 ```
 
 状态采集默认使用候选股票范围，候选来源包括热榜、讨论数和组合调仓活跃度。全市场范围通过 `--full-universe` 显式开启，适合经过评估的专项任务。社交计数使用双 worker 首轮采集，失败证券再以单 worker 和较长间隔重试；成功记录先写入，仍有失败时脚本返回失败状态。组合调仓同样先快速采集，再用保守参数重试失败证券，成功记录先 upsert。
@@ -84,9 +84,9 @@ XUEQIU_STATUS_CANDIDATE_LIMIT=200
 
 ## 统一调度
 
-```powershell
-./.venv/Scripts/python <skill-root>/scripts/scheduler.py --list-jobs
-./.venv/Scripts/python <skill-root>/scripts/scheduler.py --run-once xueqiu_cube_rebalance xueqiu_social_count xueqiu_hot_rank xueqiu_status --date <YYYY-MM-DD> --dry-run
+```sh
+uv run --locked python "<skill-root>/scripts/scheduler.py" --list-jobs
+uv run --locked python "<skill-root>/scripts/scheduler.py" --run-once xueqiu_cube_rebalance xueqiu_social_count xueqiu_hot_rank xueqiu_status --date <YYYY-MM-DD> --dry-run
 ```
 
 采集脚本输出任务级运行记录；统一调度器在任务结束后发送成功或失败通知，并将当前任务日志附在邮件正文中。客户端在检测到认证错误时发送 token 失效提醒。

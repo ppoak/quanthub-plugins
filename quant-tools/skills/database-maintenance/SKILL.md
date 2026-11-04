@@ -7,13 +7,32 @@ description: 使用来源脚本采集、写入、备份并调度量化研究数�
 
 本 skill 维护上游行情、财务、行业、社交数据的采集、规范化、分区写入、备份与定时调度。来源脚本按数据源组织，统一调度器管理运行时间、交易日、日志和通知。
 
-属于 [Quant Tools](../../README.md)。依赖安装和项目配置见插件说明，配置模板见 [.env.example](../../.env.example)。下文 `<skill-root>` 指本 `SKILL.md` 所在目录；使用安装后的实际目录执行脚本。
+`<skill-root>` 指本 Skill 的安装目录。复用项目已有的 Python 3.12+ 环境；缺少所需库时，在已有 uv 项目目录安装：
+
+```sh
+uv add -r "<skill-root>/requirements.txt"
+```
+
+只安装所用来源的额外依赖：
+
+```sh
+uv add -r "<skill-root>/requirements-ricequant.txt"
+uv add -r "<skill-root>/requirements-backup.txt"
+```
+
+两条命令分别用于 RiceQuant 和 Hugging Face 备份。RiceQuant 还需本机 Chrome、账号和服务器 notebook。无需重新下载插件或创建环境。
+
+从[配置示例](.env.example)中将所需项补充到项目 `.env`，保留已有路径、账号和任务设置。
 
 ## 目录结构
 
 ```text
 <skill-root>/
 ├── SKILL.md
+├── .env.example
+├── requirements.txt
+├── requirements-ricequant.txt
+├── requirements-backup.txt
 ├── agents/
 │   └── openai.yaml
 ├── references/
@@ -58,25 +77,25 @@ description: 使用来源脚本采集、写入、备份并调度量化研究数�
 从目标项目根目录使用虚拟环境中的 Python 运行脚本，路径使用正斜杠。也可通过 `--project-root <project-root>` 指定项目；配置从该目录的 `.env` 读取，数据、日志和其他相对路径均以该目录为基准。长期调度使用统一调度器：
 
 ```shell
-.venv/Scripts/python <skill-root>/scripts/scheduler.py
+uv run --locked python "<skill-root>/scripts/scheduler.py"
 ```
 
 查看启用的任务与调度时间：
 
 ```shell
-.venv/Scripts/python <skill-root>/scripts/scheduler.py --list-jobs
+uv run --locked python "<skill-root>/scripts/scheduler.py" --list-jobs
 ```
 
 对指定日期执行全部启用任务的 dry-run：
 
 ```shell
-.venv/Scripts/python <skill-root>/scripts/scheduler.py --run-once --date 2026-06-04 --dry-run
+uv run --locked python "<skill-root>/scripts/scheduler.py" --run-once --date 2026-06-04 --dry-run
 ```
 
 选择任务执行一次：
 
 ```shell
-.venv/Scripts/python <skill-root>/scripts/scheduler.py --run-once eastmoney_intraday_changes xueqiu_cube_rebalance --date 2026-06-04 --dry-run
+uv run --locked python "<skill-root>/scripts/scheduler.py" --run-once eastmoney_intraday_changes xueqiu_cube_rebalance --date 2026-06-04 --dry-run
 ```
 
 也可直接运行单个来源脚本，通过 `--help` 查看日期、数据根目录或采集范围。EastMoney、雪球和备份的数据目录依次读取本次 `--data-root`、来源专用目录设置、`DATA`、默认 `data`；RiceQuant 使用 `DATASET_PATH`，未设置时读取 `DATA`。
@@ -139,10 +158,10 @@ SMTP_USE_SSL=1
 修改脚本后运行语法检查、调度清单和 dry-run：
 
 ```shell
-.venv/Scripts/python -m compileall <skill-root>/scripts
-.venv/Scripts/python <skill-root>/scripts/scheduler.py --list-jobs
-.venv/Scripts/python <skill-root>/scripts/huggingface/sync_huggingface_bucket.py --include-table eastmoney_intraday_changes --dry-run
-.venv/Scripts/python <skill-root>/scripts/scheduler.py --run-once --date 2026-06-04 --dry-run
+uv run --locked python -m compileall "<skill-root>/scripts"
+uv run --locked python "<skill-root>/scripts/scheduler.py" --list-jobs
+uv run --locked python "<skill-root>/scripts/huggingface/sync_huggingface_bucket.py" --include-table eastmoney_intraday_changes --dry-run
+uv run --locked python "<skill-root>/scripts/scheduler.py" --run-once --date 2026-06-04 --dry-run
 ```
 
 涉及认证、采集和写入逻辑时，按来源参考文档使用本地样本或小范围任务验证，并记录真实执行范围、数据分区、日志和通知结果。

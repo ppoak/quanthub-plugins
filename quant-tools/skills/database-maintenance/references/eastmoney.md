@@ -58,21 +58,21 @@ EASTMONEY_INTRADAY_CHANGES_SLEEP=0.2
 
 小范围情绪采集示例：
 
-```powershell
-./.venv/Scripts/python <skill-root>/scripts/eastmoney/fetch_eastmoney_stock_sentiment.py --date 2026-06-03 --codes 600519.SH --data-root data --table-name eastmoney_stock_sentiment_test --workers 1 --sleep 0 --timeout 20 --retries 0
+```sh
+uv run --locked python "<skill-root>/scripts/eastmoney/fetch_eastmoney_stock_sentiment.py" --date 2026-06-03 --codes 600519.SH --data-root data --table-name eastmoney_stock_sentiment_test --workers 1 --sleep 0 --timeout 20 --retries 0
 ```
 
 盘中异动采集示例：
 
-```powershell
-./.venv/Scripts/python <skill-root>/scripts/eastmoney/fetch_eastmoney_intraday_changes.py --date <YYYY-MM-DD> --data-root data --table-name eastmoney_intraday_changes_test --change-types 大笔买入 大笔卖出 --sleep 0 --timeout 20 --retries 0
+```sh
+uv run --locked python "<skill-root>/scripts/eastmoney/fetch_eastmoney_intraday_changes.py" --date <YYYY-MM-DD> --data-root data --table-name eastmoney_intraday_changes_test --change-types 大笔买入 大笔卖出 --sleep 0 --timeout 20 --retries 0
 ```
 
 正式运行时使用生产表名和经过确认的请求范围。调度清单与一次性运行统一使用：
 
-```powershell
-./.venv/Scripts/python <skill-root>/scripts/scheduler.py --list-jobs
-./.venv/Scripts/python <skill-root>/scripts/scheduler.py --run-once eastmoney_intraday_changes eastmoney_stock_sentiment --date <YYYY-MM-DD> --dry-run
+```sh
+uv run --locked python "<skill-root>/scripts/scheduler.py" --list-jobs
+uv run --locked python "<skill-root>/scripts/scheduler.py" --run-once eastmoney_intraday_changes eastmoney_stock_sentiment --date <YYYY-MM-DD> --dry-run
 ```
 
 ## 故障处理

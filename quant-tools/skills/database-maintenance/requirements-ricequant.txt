@@ -1,0 +1,5 @@
+numpy>=2.0.0
+joblib
+rqdatac
+selenium>=4.44.0
+tqdm
