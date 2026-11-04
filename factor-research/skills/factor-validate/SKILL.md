@@ -17,7 +17,7 @@ description: 使用脚本执行因子独立验证，诊断并修复验证失败�
 uv run --locked python "<path-to-skill>/scripts/run_validate.py" --help
 ~~~
 
-`--sample` 先隔离计算当前 SQL 结果，再独立复算；省略时检查已有数据，供 Calculate、Update 内部调用。默认配置见 [`.env.example`](.env.example)。
+`--sample` 先隔离计算当前 SQL 结果，再独立复算；省略时检查已有数据，供 Calculate、Update 内部调用。默认配置见 [`.env.example`](assets/.env.example)。
 
 ## 结果与验收
 
