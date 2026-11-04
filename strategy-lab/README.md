@@ -10,11 +10,10 @@
 
 ## 安装与环境
 
-插件采用 Agent Plugins 1.0 格式，可单独分发本目录。以下命令使用 PowerShell，先取得最新 `main` 的完整提交号，再安装插件：
+插件采用 Agent Plugins 1.0 格式，可单独分发本目录。从 [Tags](https://github.com/ppoak/quanthub-plugins/tags) 选择已发布版本，将所有 `<tag>` 替换为同一标签（如 `v0.1.0`，仅为格式示例）。以下命令适用于 Windows PowerShell、Linux 和 macOS 的常用 shell：
 
-```powershell
-$revision = (git ls-remote https://github.com/ppoak/quanthub-plugins.git refs/heads/main).Split()[0]
-codex plugin marketplace add https://github.com/ppoak/quanthub-plugins.git --ref $revision
+```sh
+codex plugin marketplace add https://github.com/ppoak/quanthub-plugins.git --ref "<tag>"
 codex plugin add strategy-lab@quanthub
 ```
 
@@ -22,13 +21,13 @@ codex plugin add strategy-lab@quanthub
 
 使用 Python 3.12 或更新版本和 `uv`。在目标项目目录执行以下命令；新项目先运行 `uv init --bare --python 3.12`：
 
-```powershell
-uv add "base-strategy @ git+https://github.com/ppoak/quanthub-plugins.git@${revision}#subdirectory=strategy-lab/skills/base-strategy" "ashare-backtest-strategy @ git+https://github.com/ppoak/quanthub-plugins.git@${revision}#subdirectory=strategy-lab/skills/ashare-backtest-strategy" "eastmoney-strategy @ git+https://github.com/ppoak/quanthub-plugins.git@${revision}#subdirectory=strategy-lab/skills/eastmoney-strategy"
+```sh
+uv add "base-strategy @ git+https://github.com/ppoak/quanthub-plugins.git#subdirectory=strategy-lab/skills/base-strategy" "ashare-backtest-strategy @ git+https://github.com/ppoak/quanthub-plugins.git#subdirectory=strategy-lab/skills/ashare-backtest-strategy" "eastmoney-strategy @ git+https://github.com/ppoak/quanthub-plugins.git#subdirectory=strategy-lab/skills/eastmoney-strategy" --tag "<tag>"
 ```
 
-`$revision` 沿用上方安装插件时取得的完整提交号。三个 Python 包从该提交构建并安装到项目 `.venv`，不使用插件缓存的 editable 安装。按需安装后端，同时保留同一提交的 `base-strategy`。仅使用 Python 包无需安装 Agent 或插件，只需先运行上方取得 `$revision` 的命令。
+三个 Python 包从指定标签构建并安装到项目 `.venv`。按需安装后端，同时保留同一标签的 `base-strategy`。安装 Python 包无需 Agent 或插件。
 
-需要 Excel 导出时运行 `uv add "openpyxl>=3.1.0"`。提交目标项目的 `pyproject.toml` 和 `uv.lock`，其他环境运行 `uv sync --locked`。第三方依赖以目标项目的锁文件为准。更新时重新取得提交号，同时更新插件和 Python 包。
+需要 Excel 导出时运行 `uv add "openpyxl>=3.1.0"`。提交目标项目的 `pyproject.toml` 和 `uv.lock`，其他环境运行 `uv sync --locked`。第三方依赖以目标项目的锁文件为准。升级时将 `<tag>` 替换为新版本，同时更新插件和 Python 包。
 
 ## 配置与输入
 
@@ -40,19 +39,19 @@ uv add "base-strategy @ git+https://github.com/ppoak/quanthub-plugins.git@${revi
 
 ## 示例
 
-从目标项目目录运行本地策略循环：
+从目标项目目录通过 `uv run --locked python` 使用项目环境运行，无需激活虚拟环境或区分平台路径。运行本地策略循环：
 
 ```sh
-.venv/Scripts/python "<plugin-root>/skills/ashare-backtest-strategy/examples/example_strategy_loop.py"
+uv run --locked python "<plugin-root>/skills/ashare-backtest-strategy/examples/example_strategy_loop.py"
 ```
 
 运行成交评估、本地撮合与东财固定响应检查：
 
 ```sh
-.venv/Scripts/python -m unittest discover -s "<plugin-root>/skills/base-strategy/examples" -p "example_*.py"
-.venv/Scripts/python -m unittest discover -s "<plugin-root>/skills/ashare-backtest-strategy/examples" -p "example_*.py"
-.venv/Scripts/python -m unittest discover -s "<plugin-root>/skills/eastmoney-strategy/examples" -p "example_*.py"
-.venv/Scripts/python "<plugin-root>/skills/eastmoney-strategy/examples/example_mock_portfolio_loop.py"
+uv run --locked python -m unittest discover -s "<plugin-root>/skills/base-strategy/examples" -p "example_*.py"
+uv run --locked python -m unittest discover -s "<plugin-root>/skills/ashare-backtest-strategy/examples" -p "example_*.py"
+uv run --locked python -m unittest discover -s "<plugin-root>/skills/eastmoney-strategy/examples" -p "example_*.py"
+uv run --locked python "<plugin-root>/skills/eastmoney-strategy/examples/example_mock_portfolio_loop.py"
 ```
 
 配置、二维码、报表及策略输出保存在目标项目。自定义导出路径以策略代码传入的位置为准。

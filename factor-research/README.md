@@ -22,11 +22,10 @@
 
 ## 安装与环境
 
-插件采用 Agent Plugins 1.0 格式，可单独分发本目录。以下命令使用 PowerShell，先取得最新 `main` 的完整提交号，再安装插件：
+插件采用 Agent Plugins 1.0 格式，可单独分发本目录。从 [Tags](https://github.com/ppoak/quanthub-plugins/tags) 选择已发布版本，将所有 `<tag>` 替换为同一标签（如 `v0.1.0`，仅为格式示例）。以下命令适用于 Windows PowerShell、Linux 和 macOS 的常用 shell：
 
-```powershell
-$revision = (git ls-remote https://github.com/ppoak/quanthub-plugins.git refs/heads/main).Split()[0]
-codex plugin marketplace add https://github.com/ppoak/quanthub-plugins.git --ref $revision
+```sh
+codex plugin marketplace add https://github.com/ppoak/quanthub-plugins.git --ref "<tag>"
 codex plugin add factor-research@quanthub
 ```
 
@@ -34,13 +33,14 @@ codex plugin add factor-research@quanthub
 
 使用 Python 3.12 或更新版本和 `uv`。在目标项目目录执行以下命令；新项目先运行 `uv init --bare --python 3.12`：
 
-```powershell
-uv add "factor-protocol @ git+https://github.com/ppoak/quanthub-plugins.git@${revision}#subdirectory=factor-research/skills/factor-protocol" "factor-compose @ git+https://github.com/ppoak/quanthub-plugins.git@${revision}#subdirectory=factor-research/skills/factor-compose" "matplotlib>=3.9.0"
+```sh
+uv add "factor-protocol @ git+https://github.com/ppoak/quanthub-plugins.git#subdirectory=factor-research/skills/factor-protocol" "factor-compose @ git+https://github.com/ppoak/quanthub-plugins.git#subdirectory=factor-research/skills/factor-compose" --tag "<tag>"
+uv add "matplotlib>=3.9.0"
 ```
 
-`$revision` 沿用上方安装插件时取得的完整提交号。两个 Python 包从该提交构建并安装到项目 `.venv`，不使用插件缓存的 editable 安装。只需公共接口时，可仅安装 `factor-protocol`；无需安装 Agent 或插件，只需先运行上方取得 `$revision` 的命令。
+两个 Python 包从指定标签构建并安装到项目 `.venv`。只需公共接口时，可仅安装同一标签的 `factor-protocol`；安装 Python 包无需 Agent 或插件。
 
-提交目标项目的 `pyproject.toml` 和 `uv.lock`，其他环境运行 `uv sync --locked`。第三方依赖以目标项目的锁文件为准。更新时重新取得提交号，同时更新插件和 Python 包。
+提交目标项目的 `pyproject.toml` 和 `uv.lock`，其他环境运行 `uv sync --locked`。第三方依赖以目标项目的锁文件为准。升级时将 `<tag>` 替换为新版本，同时更新插件和 Python 包。
 
 合成模型需要的额外库按模型实现安装。发布和同步 GitHub 记录还需 Git、GitHub CLI 及已授权账号。
 
@@ -61,13 +61,13 @@ FACTORZOO_SCHEMA=schema.yaml
 
 ## 运行
 
-从目标项目目录运行脚本，并显式传入 `--project-root`：
+从目标项目目录通过 `uv run --locked python` 使用项目环境运行脚本，无需激活虚拟环境或区分平台路径；显式传入 `--project-root`：
 
 ```sh
-.venv/Scripts/python "<plugin-root>/skills/factor-evaluate/scripts/run_evaluate.py" --project-root "<project-root>" --factor-package <factor_name> --operation evaluate --operation check --operation plot --operation readme
-.venv/Scripts/python "<plugin-root>/skills/factor-evaluate/scripts/run_evaluate.py" --project-root "<project-root>" --factor-data artifacts/compositions/study/run_example/signals --factor-column score
-.venv/Scripts/python "<plugin-root>/skills/factor-update/scripts/run_update.py" --project-root "<project-root>" --all --dry-run
-.venv/Scripts/python -m factor_compose --config config/workflow.yaml
+uv run --locked python "<plugin-root>/skills/factor-evaluate/scripts/run_evaluate.py" --project-root "<project-root>" --factor-package "<factor_name>" --operation evaluate --operation check --operation plot --operation readme
+uv run --locked python "<plugin-root>/skills/factor-evaluate/scripts/run_evaluate.py" --project-root "<project-root>" --factor-data artifacts/compositions/study/run_example/signals --factor-column score
+uv run --locked python "<plugin-root>/skills/factor-update/scripts/run_update.py" --project-root "<project-root>" --all --dry-run
+uv run --locked python -m factor_compose --config config/workflow.yaml
 ```
 
 标准因子包按 Design → Develop → Review → Validate → Benchmark → Calculate → Evaluate 执行；发布由用户决定。合成评分直接交给 Evaluate，使用 `--factor-data` 指定评分目录。

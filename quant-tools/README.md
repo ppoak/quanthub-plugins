@@ -13,11 +13,10 @@
 
 在 ChatGPT／Codex 的仓库插件目录中选择 QuantHub 下的 `quant-tools`。仓库登记文件为 `.agents/plugins/marketplace.json`；单独分发本插件时，在所用客户端登记插件目录。其他实现该标准的客户端使用各自的插件安装入口。
 
-以下命令使用 PowerShell，先取得最新 `main` 的完整提交号，再安装插件：
+从 [Tags](https://github.com/ppoak/quanthub-plugins/tags) 选择已发布版本，将所有 `<tag>` 替换为同一标签（如 `v0.1.0`，仅为格式示例）。以下命令适用于 Windows PowerShell、Linux 和 macOS 的常用 shell：
 
-```powershell
-$revision = (git ls-remote https://github.com/ppoak/quanthub-plugins.git refs/heads/main).Split()[0]
-codex plugin marketplace add https://github.com/ppoak/quanthub-plugins.git --ref $revision
+```sh
+codex plugin marketplace add https://github.com/ppoak/quanthub-plugins.git --ref "<tag>"
 codex plugin add quant-tools@quanthub
 ```
 
@@ -25,25 +24,25 @@ codex plugin add quant-tools@quanthub
 
 ## Python 环境
 
-使用 Python 3.12 或更新版本和 `uv`。仅下载报告无需额外 Python 依赖，在目标项目运行 `uv venv .venv --python 3.12` 即可。
+使用 Python 3.12 或更新版本和 `uv`。仅下载报告无需额外 Python 依赖。新项目先运行 `uv init --bare --python 3.12`，再运行 `uv sync` 准备环境。
 
-数据库工具没有独立 Python 包，按安装插件时的 `$revision` 获取源码和锁文件。`<source-root>` 使用独立的绝对路径；已有克隆时先 `git -C "<source-root>" fetch origin`，再切换提交：
+数据库工具没有独立 Python 包，按安装插件时的同一标签获取源码和锁文件。`<source-root>` 使用独立的绝对路径；已有克隆时跳过 clone，先运行 `git -C "<source-root>" fetch origin --tags`：
 
-```powershell
+```sh
 git clone https://github.com/ppoak/quanthub-plugins.git "<source-root>"
-git -C "<source-root>" checkout --detach $revision
+git -C "<source-root>" checkout --detach "refs/tags/<tag>"
 uv export --project "<source-root>/quant-tools" --frozen --no-emit-project --no-hashes --output-file "<source-root>/quant-tools/requirements.txt"
 ```
 
 在目标项目目录导入这些固定版本依赖；新项目先运行 `uv init --bare --python 3.12`：
 
-```powershell
+```sh
 uv add -r "<source-root>/quant-tools/requirements.txt"
 ```
 
-RiceQuant 与 Hugging Face 备份分别在 `uv export` 中增加 `--group ricequant`、`--group backup`，也可同时指定。提交目标项目的 `pyproject.toml` 和 `uv.lock`，其他环境运行 `uv sync --locked`。更新时重新取得提交号，同时更新插件、导出并导入依赖。
+RiceQuant 与 Hugging Face 备份分别在 `uv export` 中增加 `--group ricequant`、`--group backup`，也可同时指定。提交目标项目的 `pyproject.toml` 和 `uv.lock`，其他环境运行 `uv sync --locked`。升级时切换新标签，同时更新插件、重新导出并导入依赖。
 
-下文脚本使用项目 `.venv`；Linux／macOS 将 `.venv/Scripts/python` 替换为 `.venv/bin/python`。
+下文通过 `uv run --locked python` 使用项目环境运行脚本，无需激活虚拟环境或区分平台路径。
 
 RiceQuant 本地采集还需 Chrome、账号和服务器 notebook；发现报告签名需要 OpenSSL 或 Node.js，也可直接提供授权下载地址。来源要求见对应 Skill。
 
@@ -54,13 +53,13 @@ RiceQuant 本地采集还需 Chrome、账号和服务器 notebook；发现报告
 查看调度任务：
 
 ```sh
-.venv/Scripts/python "<plugin-root>/skills/database-maintenance/scripts/scheduler.py" --project-root "<project-root>" --list-jobs
+uv run --locked python "<plugin-root>/skills/database-maintenance/scripts/scheduler.py" --project-root "<project-root>" --list-jobs
 ```
 
 下载报告：
 
 ```sh
-.venv/Scripts/python "<plugin-root>/skills/report-download/scripts/bigquant_download.py" "<report-url>" --project-root "<project-root>"
+uv run --locked python "<plugin-root>/skills/report-download/scripts/bigquant_download.py" "<report-url>" --project-root "<project-root>"
 ```
 
 数据、报告、日志、下载缓存和就绪标记保存在目标项目。长期调度使用同一脚本入口及 `--project-root`，由项目原有的服务或任务计划启动。
