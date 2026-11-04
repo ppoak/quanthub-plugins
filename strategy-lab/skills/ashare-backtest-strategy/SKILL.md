@@ -5,7 +5,7 @@ description: Build and validate deterministic local A-share backtests using next
 
 # A-share Backtest Strategy
 
-复用项目已有的 Python 3.12+ 环境，按下文安装缺少的依赖。`<skill-root>` 为本 Skill 的安装目录。
+复用项目已有的 Python 3.12+ 环境，按下文安装缺少的依赖。`<path-to-skill>` 为本 Skill 的安装目录。
 
 ## 安装
 
@@ -50,6 +50,6 @@ executions = ledger.executions
 [均线策略循环示例](examples/example_strategy_loop.py) 用确定性日线展示信号时点、下一 bar 成交、目标仓位和账本评估；[生命周期示例](examples/example_lifecycle.py) 与 [导出契约示例](examples/example_export_contracts.py) 检查 T+1、部分成交、自定义滑点、字段别名和成交回放。[条件单示例](examples/example_conditional_orders.py) 展示触发价格、成交量约束、止损限价后续成交、部分成交和订单有效期。示例均可运行：
 
 ```sh
-uv run --locked python "<skill-root>/examples/example_strategy_loop.py"
-uv run --locked python -m unittest discover -s "<skill-root>/examples" -p "example_*.py"
+uv run --locked python "<path-to-skill>/examples/example_strategy_loop.py"
+uv run --locked python -m unittest discover -s "<path-to-skill>/examples" -p "example_*.py"
 ```

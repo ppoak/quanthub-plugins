@@ -5,7 +5,7 @@ description: Build an EastMoney remote simulated-portfolio mirror using provider
 
 # EastMoney Strategy
 
-复用项目已有的 Python 3.12+ 环境，按下文安装缺少的依赖。`<skill-root>` 为本 Skill 的安装目录。
+复用项目已有的 Python 3.12+ 环境，按下文安装缺少的依赖。`<path-to-skill>` 为本 Skill 的安装目录。
 
 ## 安装
 
@@ -74,8 +74,8 @@ for execution in exchange.fetch_executions(account_id=account_id):
 运行固定响应示例或检查示例行为：
 
 ```sh
-uv run --locked python "<skill-root>/examples/example_mock_portfolio_loop.py"
-uv run --locked python -m unittest discover -s "<skill-root>/examples" -p "example_*.py"
+uv run --locked python "<path-to-skill>/examples/example_mock_portfolio_loop.py"
+uv run --locked python -m unittest discover -s "<path-to-skill>/examples" -p "example_*.py"
 ```
 
 认证、刷新与异常处理见 [东财后端参考](references/eastmoney.md)。

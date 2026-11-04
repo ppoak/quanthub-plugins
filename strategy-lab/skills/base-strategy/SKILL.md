@@ -5,7 +5,7 @@ description: 提供策略框架的核心模型、四层契约、成交事实存�
 
 # Base Strategy
 
-复用项目已有的 Python 3.12+ 环境，按下文安装缺少的依赖。`<skill-root>` 为本 Skill 的安装目录。
+复用项目已有的 Python 3.12+ 环境，按下文安装缺少的依赖。`<path-to-skill>` 为本 Skill 的安装目录。
 
 本 skill 说明策略运行所需的基础模型、Account／Client／Exchange／Ledger 四层契约、订单与成交事实存储，以及基于成交记录的执行评估。
 
@@ -43,5 +43,5 @@ Strategy -> Client -> Exchange -> Account
 [订单、成交与评估示例](examples/example_store_evaluation.py) 展示如何记录基础模型、去重成交事实，并从成交序列重建净值：
 
 ```sh
-uv run --locked python -m unittest discover -s "<skill-root>/examples" -p "example_*.py"
+uv run --locked python -m unittest discover -s "<path-to-skill>/examples" -p "example_*.py"
 ```
