@@ -1,0 +1,4 @@
+interface:
+  display_name: "Factor Calculate"
+  short_description: "Run calculation scripts and diagnose failures"
+  default_prompt: "Use $factor-calculate to run the calculation script or diagnose a failed calculation."

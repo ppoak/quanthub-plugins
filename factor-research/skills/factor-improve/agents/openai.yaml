@@ -1,0 +1,4 @@
+interface:
+  display_name: "Factor Improve"
+  short_description: "Diagnose factor results and guide design changes"
+  default_prompt: "Use $factor-improve to inspect this factor package evaluation, diagnose IC, layering and long-only returns, and propose construction changes for Factor Design."

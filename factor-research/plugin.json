@@ -1,0 +1,21 @@
+{
+  "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
+  "name": "factor-research",
+  "version": "0.1.0",
+  "description": "设计、开发、计算、验证、评估和合成量化因子，维护研究产物与增量更新。",
+  "author": {"name": "QuantHub"},
+  "repository": "https://github.com/ppoak/quanthub-plugins",
+  "license": "MIT",
+  "keywords": ["quant", "factors", "research"],
+  "extensions": {
+    "com.openai": {
+      "interface": {
+        "displayName": "Factor Research",
+        "shortDescription": "量化因子研究、评估与合成",
+        "brandColor": "#16A34A",
+        "logo": "./assets/logo.svg",
+        "composerIcon": "./assets/logo.svg"
+      }
+    }
+  }
+}

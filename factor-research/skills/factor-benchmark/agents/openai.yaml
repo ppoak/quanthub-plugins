@@ -1,0 +1,4 @@
+interface:
+  display_name: "Factor Benchmark"
+  short_description: "Run benchmark scripts and diagnose failures"
+  default_prompt: "Use $factor-benchmark to run the benchmark script or diagnose a failed benchmark."

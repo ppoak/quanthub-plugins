@@ -1,0 +1,4 @@
+interface:
+  display_name: "Factor Compose"
+  short_description: "Compose point-in-time factor signals"
+  default_prompt: "Use $factor-compose to combine factor inputs into a point-in-time signal."

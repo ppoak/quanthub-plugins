@@ -1,0 +1,14 @@
+[project]
+name = "base-strategy"
+version = "0.1.0"
+description = "Shared four-layer trading strategy contracts and evaluation."
+requires-python = ">=3.12"
+dependencies = ["numpy>=2.0.0", "pandas>=2.2.0"]
+[project.optional-dependencies]
+excel = ["openpyxl>=3.1.0"]
+[build-system]
+requires = ["setuptools>=69"]
+build-backend = "setuptools.build_meta"
+[tool.setuptools.packages.find]
+where = ["src"]
+include = ["base_strategy*"]

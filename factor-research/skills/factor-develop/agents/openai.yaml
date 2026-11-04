@@ -1,0 +1,4 @@
+interface:
+  display_name: "Factor Develop"
+  short_description: "Design SQL factors and Python validation"
+  default_prompt: "Use $factor-develop to define and implement this QuantHub factor before calculation."

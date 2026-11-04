@@ -1,0 +1,4 @@
+interface:
+  display_name: "Factor Validate"
+  short_description: "Run validation scripts and diagnose failures"
+  default_prompt: "Use $factor-validate to run the validation script or diagnose a failed validation."

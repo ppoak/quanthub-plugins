@@ -1,0 +1,4 @@
+interface:
+  display_name: "A-share Backtest Strategy"
+  short_description: "Backtest A-share strategies with local matching"
+  default_prompt: "Use $ashare-backtest-strategy to build or validate a local A-share historical backtest."

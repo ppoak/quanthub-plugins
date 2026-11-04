@@ -1,0 +1,18 @@
+[project]
+name = "factor-compose"
+version = "0.0.0"
+description = "Factor preprocessing, composition and standard factor handoff."
+requires-python = ">=3.12"
+dependencies = [
+    "factor-protocol>=0.0.0",
+    "duckdb>=1.1.0",
+    "numpy>=2.0.0",
+    "pandas>=2.2.0",
+    "pyyaml>=6.0",
+]
+[build-system]
+requires = ["setuptools>=69"]
+build-backend = "setuptools.build_meta"
+[tool.setuptools.packages.find]
+where = ["src"]
+include = ["factor_compose*"]

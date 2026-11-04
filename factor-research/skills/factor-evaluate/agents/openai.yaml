@@ -1,0 +1,4 @@
+interface:
+  display_name: "Factor Evaluate"
+  short_description: "Run evaluation scripts and diagnose failures"
+  default_prompt: "Use $factor-evaluate to run the evaluation script or diagnose a failed evaluation."

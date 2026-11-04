@@ -1,0 +1,4 @@
+interface:
+  display_name: "Factor Review"
+  short_description: "Audit factor code and hand off stage commands"
+  default_prompt: "Use $factor-review to audit this developed QuantHub factor and hand off the stage commands to the user after it passes."

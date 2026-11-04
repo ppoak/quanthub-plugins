@@ -1,0 +1,4 @@
+interface:
+  display_name: "Factor Update"
+  short_description: "Incrementally refresh active factors"
+  default_prompt: "Use $factor-update to incrementally refresh active factors from the project's available data and update validation, evaluation, and research records."

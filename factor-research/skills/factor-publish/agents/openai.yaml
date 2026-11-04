@@ -1,0 +1,4 @@
+interface:
+  display_name: "Factor Publish"
+  short_description: "Run publishing scripts and diagnose failures"
+  default_prompt: "Use $factor-publish to run the publishing script or diagnose a failed publication."

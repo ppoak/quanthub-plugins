@@ -1,0 +1,4 @@
+interface:
+  display_name: "Base Strategy"
+  short_description: "Understand core strategy contracts and evaluate executions"
+  default_prompt: "Use $base-strategy to understand the shared strategy models, core lifecycle, and execution-based evaluation."

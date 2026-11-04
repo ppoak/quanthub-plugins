@@ -1,0 +1,4 @@
+interface:
+  display_name: "Factor Design"
+  short_description: "Create templated factor READMEs and prereleases"
+  default_prompt: "Use $factor-design to prepare the design sections and create a factor README and prerelease."

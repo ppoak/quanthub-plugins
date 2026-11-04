@@ -1,0 +1,7 @@
+interface:
+  display_name: "报告下载"
+  short_description: "按来源脚本下载并校验研究报告 PDF，使用项目配置的保存目录"
+  default_prompt: "使用 $report-download 下载这份报告，并按项目 .env 配置保存目录。"
+
+policy:
+  allow_implicit_invocation: true

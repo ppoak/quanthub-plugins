@@ -1,0 +1,4 @@
+interface:
+  display_name: "Factor Workflow"
+  short_description: "Orchestrate the QuantHub factor lifecycle"
+  default_prompt: "Use $factor-workflow to take this factor from Issue to evaluation and daily update."

@@ -1,0 +1,21 @@
+{
+  "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
+  "name": "strategy-lab",
+  "version": "0.1.0",
+  "description": "构建策略框架，运行本地 A 股回测，接入东财模拟交易与账户镜像。",
+  "author": {"name": "QuantHub"},
+  "repository": "https://github.com/ppoak/quanthub-plugins",
+  "license": "MIT",
+  "keywords": ["quant", "strategies", "backtest", "trading"],
+  "extensions": {
+    "com.openai": {
+      "interface": {
+        "displayName": "Strategy Lab",
+        "shortDescription": "策略框架、A 股回测与东财模拟交易",
+        "brandColor": "#7C3AED",
+        "logo": "./assets/logo.svg",
+        "composerIcon": "./assets/logo.svg"
+      }
+    }
+  }
+}

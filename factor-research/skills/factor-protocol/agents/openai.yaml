@@ -1,0 +1,4 @@
+interface:
+  display_name: "Factor Protocol"
+  short_description: "Stable factor contracts and DuckDB Hive storage"
+  default_prompt: "Use $factor-protocol to work on the shared factor package protocol, loader, registry, fingerprints, or storage."

@@ -1,0 +1,4 @@
+interface:
+  display_name: "EastMoney Strategy"
+  short_description: "Sync EastMoney simulated portfolios"
+  default_prompt: "Use $eastmoney-strategy to build or validate an EastMoney simulated-portfolio strategy adapter."
