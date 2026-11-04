@@ -10,14 +10,14 @@ description: 使用来源脚本采集、写入、备份并调度量化研究数�
 `<skill-root>` 指本 Skill 的安装目录。复用项目已有的 Python 3.12+ 环境；缺少所需库时，在已有 uv 项目目录安装：
 
 ```sh
-uv add -r "<skill-root>/requirements.txt"
+uv add -r "<skill-root>/requirements/base.txt"
 ```
 
 只安装所用来源的额外依赖：
 
 ```sh
-uv add -r "<skill-root>/requirements-ricequant.txt"
-uv add -r "<skill-root>/requirements-backup.txt"
+uv add -r "<skill-root>/requirements/ricequant.txt"
+uv add -r "<skill-root>/requirements/backup.txt"
 ```
 
 两条命令分别用于 RiceQuant 和 Hugging Face 备份。RiceQuant 还需本机 Chrome、账号和服务器 notebook。无需重新下载插件或创建环境。
@@ -30,9 +30,10 @@ uv add -r "<skill-root>/requirements-backup.txt"
 <skill-root>/
 ├── SKILL.md
 ├── .env.example
-├── requirements.txt
-├── requirements-ricequant.txt
-├── requirements-backup.txt
+├── requirements/
+│   ├── base.txt
+│   ├── ricequant.txt
+│   └── backup.txt
 ├── agents/
 │   └── openai.yaml
 ├── references/
