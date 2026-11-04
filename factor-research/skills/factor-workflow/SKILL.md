@@ -5,7 +5,7 @@ description: 编排因子从设计、开发、验证到评估、效果改进、�
 
 # 因子工作流
 
-运行前按 [Factor Protocol 安装说明](../factor-protocol/SKILL.md#安装)检查项目已有环境和依赖。`<skill-root>` 指本 Skill 的安装目录，`<plugin-root>` 指插件根目录。
+运行前按 [Factor Protocol 安装说明](../factor-protocol/SKILL.md#安装)检查项目已有环境和依赖。`<path-to-skill>` 指本 Skill 的安装目录。
 
 本技能统筹因子从研究来源、定义设计、实现、审查、计算、验证、评估、效果改进、发布到生产更新的流程，明确阶段顺序、进入条件、交付物和返工路径。各阶段按对应技能执行。因子包是最小发布和更新单位，包内声明列共同计算、共同更新，并整体发布。
 

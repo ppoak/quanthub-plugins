@@ -5,7 +5,7 @@ description: 准备因子数据、训练合成模型并保存评分，使用 Fac
 
 # Factor Compose
 
-优先使用项目已有的 Python 3.12+ 环境，按下文安装缺少的依赖。`<skill-root>` 指本 Skill 的安装目录，`<plugin-root>` 指插件根目录。
+优先使用项目已有的 Python 3.12+ 环境，按下文安装缺少的依赖。
 
 通过 YAML 运行数据准备和模型训练，使用 Store 保存模型、评分和运行记录。配置方法见[使用说明](references/usage.md)，编写模型和训练流程见[开发说明](references/development.md)。
 
@@ -29,14 +29,14 @@ uv run --locked python -m factor_compose --config config/workflow.yaml
 
 `--config` 可以指向数据准备或完整训练流程。终端进度写入标准错误流，标准输出为 JSON 结果，失败返回非零状态。数据准备返回 dataset ID，训练返回运行信息，完整 Workflow 的 `results` 保存各步骤结果。
 
-训练完成后，将返回结果中的 `signals` 目录传给 [Factor Evaluate](../factor-evaluate/SKILL.md)：
+训练完成后，将返回结果中的 `signals` 目录传给 [Factor Evaluate](../factor-evaluate/SKILL.md)。下方 `<path-to-skill>` 指 Factor Evaluate 的实际安装目录：
 
 ```python
 import subprocess
 import sys
 
 subprocess.run([
-    sys.executable, "<plugin-root>/skills/factor-evaluate/scripts/run_evaluate.py",
+    sys.executable, "<path-to-skill>/scripts/run_evaluate.py",
     "--factor-data", prediction["signals"],
     "--factor-column", "score",
     "--output-dir", "artifacts/evaluations/" + prediction["run_id"],

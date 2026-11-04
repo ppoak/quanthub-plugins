@@ -5,7 +5,7 @@ description: 提供因子共用接口、DuckDB Hive 存储、因子包加载和�
 
 # Factor Protocol
 
-优先使用项目已有的 Python 3.12+ 环境，按下文安装缺少的依赖。`<skill-root>` 指本 Skill 的安装目录，`<plugin-root>` 指插件根目录。
+优先使用项目已有的 Python 3.12+ 环境，按下文安装缺少的依赖。`<path-to-skill>` 指本 Skill 的安装目录。
 
 本技能提供因子包接口、路径解析、注册表读取、定义指纹、数据身份、DuckDB/Hive 数据访问和公共产物读写接口。
 
@@ -64,6 +64,6 @@ ARTIFACTS=artifacts
 协议使用示例和可执行契约案例统一放在 `examples/`；每个案例既演示接口，也用断言核对行为。运行存储接口与数据身份案例：
 
 ```sh
-uv run --locked python "<skill-root>/examples/protocol_cases.py"
-uv run --locked python "<skill-root>/examples/identity_cases.py"
+uv run --locked python "<path-to-skill>/examples/protocol_cases.py"
+uv run --locked python "<path-to-skill>/examples/identity_cases.py"
 ```

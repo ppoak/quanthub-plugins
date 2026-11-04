@@ -55,14 +55,14 @@ prediction = store.result(run_id)
 
 ## 运行评估
 
-将评分目录传给 Factor Evaluate 的 `--factor-data`，用 `--output-dir` 指定结果目录：
+将评分目录传给 Factor Evaluate 的 `--factor-data`，用 `--output-dir` 指定结果目录。`<path-to-skill>` 指 Factor Evaluate 的实际安装目录：
 
 ```python
 import subprocess
 import sys
 
 subprocess.run(
-    [sys.executable, "<plugin-root>/skills/factor-evaluate/scripts/run_evaluate.py",
+    [sys.executable, "<path-to-skill>/scripts/run_evaluate.py",
      "--factor-data", prediction["signals"],
      "--factor-column", "score",
      "--output-dir", "artifacts/evaluations/" + prediction["run_id"],
