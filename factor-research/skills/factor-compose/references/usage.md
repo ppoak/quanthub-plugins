@@ -20,7 +20,7 @@ params:
 `preprocessor.yaml` 选择数据准备类，`training.yaml` 选择训练 Workflow 和模型。步骤按顺序执行，步骤内的 `params` 覆盖阶段配置的同名参数。`$ref` 可读取结果字段，例如 `{$ref: composed.run_id}`。
 
 ```sh
-.venv/Scripts/python -m factor_compose --config config/workflow.yaml
+uv run --locked python -m factor_compose --config config/workflow.yaml
 ```
 
 Python 使用相同配置：
@@ -59,9 +59,10 @@ prediction = store.result(run_id)
 
 ```python
 import subprocess
+import sys
 
 subprocess.run(
-    [".venv/Scripts/python", "<plugin-root>/skills/factor-evaluate/scripts/run_evaluate.py",
+    [sys.executable, "<plugin-root>/skills/factor-evaluate/scripts/run_evaluate.py",
      "--factor-data", prediction["signals"],
      "--factor-column", "score",
      "--output-dir", "artifacts/evaluations/" + prediction["run_id"],

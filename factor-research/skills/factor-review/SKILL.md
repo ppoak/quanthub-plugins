@@ -5,7 +5,7 @@ description: 全面审查因子定义与实现，核对数据时点、频率、�
 
 # Factor Review
 
-运行前按[插件说明](../../README.md)准备项目环境。`<skill-root>` 指本 Skill 的安装目录，`<plugin-root>` 指插件根目录。
+运行前按 [Factor Protocol 安装说明](../factor-protocol/SKILL.md#安装)检查项目已有环境和依赖。`<skill-root>` 指本 Skill 的安装目录，`<plugin-root>` 指插件根目录。
 
 ## 目标
 
@@ -61,18 +61,18 @@ Review 不修改因子实现、定义或包内配置。结论、证据和交接�
 - `fail`：列出最小修复项并退回 `factor-develop`；
 - 定义或数据口径不清时，暂停审核并请求决策。
 
-交接前核对并补齐项目 `.env` 的目录、阶段日期和默认参数，确保 `FACTOR_WORKFLOW_NAME` 与目标因子一致；配置见[示例](../../.env.example)。回复中将实际因子名称和日期填入下列命令，Calculate 的资源参数在 Benchmark 通过后按结果填写。后续阶段由用户运行，Agent 在用户请求诊断或修复时再介入。
+交接前核对并补齐项目 `.env` 的目录、阶段日期和默认参数，确保 `FACTOR_WORKFLOW_NAME` 与目标因子一致；配置见[示例](../factor-protocol/.env.example)。回复中将实际因子名称和日期填入下列命令，Calculate 的资源参数在 Benchmark 通过后按结果填写。后续阶段由用户运行，Agent 在用户请求诊断或修复时再介入。
 
 ## 后续执行
 
 在项目根目录激活项目虚拟环境，以下 `python` 指向该环境。按 Validate → Benchmark → Calculate → Evaluate 顺序运行，逐项通过后再进入下一阶段。Evaluate 完成后，用户同意发布才运行 Publish；需要改善效果时进入 [Factor Improve](../factor-improve/SKILL.md)。执行前替换占位值。
 
 ~~~shell
-.venv/Scripts/python "<plugin-root>/skills/factor-validate/scripts/run_validate.py" --factor-name <factor_name> --sample --begin <validate_begin> --end <validate_end>
-.venv/Scripts/python "<plugin-root>/skills/factor-benchmark/scripts/run_benchmark.py" --factor-name <factor_name> --end <benchmark_end> --threads <threads> --memory-limit <memory_limit>
-.venv/Scripts/python "<plugin-root>/skills/factor-calculate/scripts/run_calculate.py" --factor-name <factor_name> --begin <calculate_begin> --end <calculate_end> --compute-batch-days <batch_days> --threads <threads> --memory-limit <memory_limit>
-.venv/Scripts/python "<plugin-root>/skills/factor-evaluate/scripts/run_evaluate.py" --factor-package <factor_name> --end <evaluate_end> --operation evaluate --operation check --operation plot --operation readme
-.venv/Scripts/python "<plugin-root>/skills/factor-publish/scripts/run_publish.py" --factor-name <factor_name>
+uv run --locked python "<plugin-root>/skills/factor-validate/scripts/run_validate.py" --factor-name <factor_name> --sample --begin <validate_begin> --end <validate_end>
+uv run --locked python "<plugin-root>/skills/factor-benchmark/scripts/run_benchmark.py" --factor-name <factor_name> --end <benchmark_end> --threads <threads> --memory-limit <memory_limit>
+uv run --locked python "<plugin-root>/skills/factor-calculate/scripts/run_calculate.py" --factor-name <factor_name> --begin <calculate_begin> --end <calculate_end> --compute-batch-days <batch_days> --threads <threads> --memory-limit <memory_limit>
+uv run --locked python "<plugin-root>/skills/factor-evaluate/scripts/run_evaluate.py" --factor-package <factor_name> --end <evaluate_end> --operation evaluate --operation check --operation plot --operation readme
+uv run --locked python "<plugin-root>/skills/factor-publish/scripts/run_publish.py" --factor-name <factor_name>
 ~~~
 
 Calculate 包含收尾验证，批次、线程和内存按 Benchmark 结果显式传入。其余参数与用法见各脚本 `--help`。

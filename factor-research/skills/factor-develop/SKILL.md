@@ -5,7 +5,7 @@ description: 用 DuckDB SQL 实现因子生产计算，并用独立 Python 实�
 
 # 因子开发
 
-运行前按[插件说明](../../README.md)准备项目环境。`<skill-root>` 指本 Skill 的安装目录，`<plugin-root>` 指插件根目录。
+运行前按 [Factor Protocol 安装说明](../factor-protocol/SKILL.md#安装)检查项目已有环境和依赖。`<skill-root>` 指本 Skill 的安装目录，`<plugin-root>` 指插件根目录。
 
 项目根目录 `.env` 中的 `FACTORZOO` 指定因子源码根目录。以 `$FACTORZOO/<factor_name>/README.md` 第 1–3 节为实现规格，完成因子代码包并交由 Factor Review 审查。目录、元数据和入口遵循[因子包接口说明](../factor-protocol/references/factor-package-protocol.md)。
 

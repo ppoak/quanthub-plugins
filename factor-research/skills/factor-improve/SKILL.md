@@ -5,7 +5,7 @@ description: 检视因子评估结果，围绕 IC、分层和多头收益提出�
 
 # Factor Improve
 
-运行前按[插件说明](../../README.md)准备项目环境。`<skill-root>` 指本 Skill 的安装目录，`<plugin-root>` 指插件根目录。
+运行前按 [Factor Protocol 安装说明](../factor-protocol/SKILL.md#安装)检查项目已有环境和依赖。`<skill-root>` 指本 Skill 的安装目录，`<plugin-root>` 指插件根目录。
 
 Evaluate 完成后，检视因子效果，以扣除成本后的 Top 多头收益为重点，同时考察 IC 与分层收益稳定性。用户认可当前结果时可直接进入 Publish；否则，找出值得改进的构造，并将具体方案交回 Design。
 

@@ -5,19 +5,21 @@ description: 使用脚本发布因子完整评估资产，诊断并修复发布�
 
 # Factor Publish
 
-运行前按[插件说明](../../README.md)准备项目环境。`<skill-root>` 指本 Skill 的安装目录，`<plugin-root>` 指插件根目录。
+运行前按 [Factor Protocol 安装说明](../factor-protocol/SKILL.md#安装)检查项目已有环境和依赖。`<skill-root>` 指本 Skill 的安装目录，`<plugin-root>` 指插件根目录。
 
 `scripts/run_publish.py` 发布因子包的完整评估资产。发布由用户决定；Agent 按需运行脚本，在失败时诊断和修复。
+
+发布和同步 GitHub 记录还需 Git、GitHub CLI 及已授权账号。
 
 ## 脚本入口
 
 Evaluate 完成且用户同意发布后，在项目根目录激活项目虚拟环境。需安装并登录 GitHub CLI（`gh`），参数与用法以脚本帮助为准：
 
 ~~~shell
-.venv/Scripts/python "<skill-root>/scripts/run_publish.py" --help
+uv run --locked python "<skill-root>/scripts/run_publish.py" --help
 ~~~
 
-目录读取 `.env` 的 `FACTORZOO`、`DATA`、`ARTIFACTS`，见 [`.env.example`](../../.env.example)。用 `--dry-run` 核对输入并查看上传计划，不修改远端或验收状态。
+目录读取 `.env` 的 `FACTORZOO`、`DATA`、`ARTIFACTS`，见 [`.env.example`](../factor-protocol/.env.example)。用 `--dry-run` 核对输入并查看上传计划，不修改远端或验收状态。
 
 目标 Release 必须由 Design 创建，tag 与包名一致且非 Draft，保留参考 PDF 或经用户确认的缺失记录。
 
@@ -30,7 +32,7 @@ Evaluate 完成且用户同意发布后，在项目根目录激活项目虚拟�
 Design 创建 prerelease 时同步设计版 README，Publish 同步完成版。发布默认执行 `--operation publish`，同时更新本地图片链接和 Release 说明。仅重同步当前 README 与 Release 标题时运行：
 
 ```sh
-.venv/Scripts/python "<skill-root>/scripts/run_publish.py" --project-root . --factor-name <factor_name> --operation readme
+uv run --locked python "<skill-root>/scripts/run_publish.py" --project-root . --factor-name <factor_name> --operation readme
 ```
 
 该操作仅同步 Release 标题与正文，保留本地验收状态；`--dry-run` 只预览。Release 说明直接采用项目中当前因子 README 全文。

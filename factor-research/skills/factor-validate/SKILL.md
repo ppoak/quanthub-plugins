@@ -5,7 +5,7 @@ description: 使用脚本执行因子独立验证，诊断并修复验证失败�
 
 # Factor Validate
 
-运行前按[插件说明](../../README.md)准备项目环境。`<skill-root>` 指本 Skill 的安装目录，`<plugin-root>` 指插件根目录。
+运行前按 [Factor Protocol 安装说明](../factor-protocol/SKILL.md#安装)检查项目已有环境和依赖。`<skill-root>` 指本 Skill 的安装目录，`<plugin-root>` 指插件根目录。
 
 `scripts/run_validate.py` 自动完成独立复算、覆盖检查、误差审计和 README 回写。Agent 按需运行脚本，在验证失败时诊断和修复。
 
@@ -14,10 +14,10 @@ description: 使用脚本执行因子独立验证，诊断并修复验证失败�
 在项目根目录激活项目虚拟环境后运行，参数与用法以脚本帮助为准：
 
 ~~~shell
-.venv/Scripts/python "<skill-root>/scripts/run_validate.py" --help
+uv run --locked python "<skill-root>/scripts/run_validate.py" --help
 ~~~
 
-`--sample` 先隔离计算当前 SQL 结果，再独立复算；省略时检查已有数据，供 Calculate、Update 内部调用。默认配置见 [`.env.example`](../../.env.example)。
+`--sample` 先隔离计算当前 SQL 结果，再独立复算；省略时检查已有数据，供 Calculate、Update 内部调用。默认配置见 [`.env.example`](.env.example)。
 
 ## 结果与验收
 

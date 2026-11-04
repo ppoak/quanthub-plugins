@@ -5,7 +5,7 @@ description: 设计并维护九节因子 README，记录因子定义、数据口
 
 # 因子设计
 
-运行前按[插件说明](../../README.md)准备项目环境。`<skill-root>` 指本 Skill 的安装目录，`<plugin-root>` 指插件根目录。
+运行前按 [Factor Protocol 安装说明](../factor-protocol/SKILL.md#安装)检查项目已有环境和依赖。`<skill-root>` 指本 Skill 的安装目录，`<plugin-root>` 指插件根目录。
 
 ## 目标
 
@@ -27,13 +27,13 @@ README 使用固定九节结构，记录可复核的设计、来源和结果摘�
 在项目根目录激活项目虚拟环境，参数与用法见脚本帮助；`--dry-run` 不修改 README 或远端：
 
 ~~~shell
-.venv/Scripts/python "<skill-root>/scripts/create_readme.py" --help
+uv run --locked python "<skill-root>/scripts/create_readme.py" --help
 ~~~
 
 设计 README 提交推送后创建 Draft PR：
 
 ~~~shell
-.venv/Scripts/python "<plugin-root>/skills/factor-publish/scripts/sync_pr.py" --factor-name <factor_name> --create
+uv run --locked python "<plugin-root>/skills/factor-publish/scripts/sync_pr.py" --factor-name <factor_name> --create
 ~~~
 
 ## README 内容

@@ -5,13 +5,13 @@ description: 编排因子从设计、开发、验证到评估、效果改进、�
 
 # 因子工作流
 
-运行前按[插件说明](../../README.md)准备项目环境。`<skill-root>` 指本 Skill 的安装目录，`<plugin-root>` 指插件根目录。
+运行前按 [Factor Protocol 安装说明](../factor-protocol/SKILL.md#安装)检查项目已有环境和依赖。`<skill-root>` 指本 Skill 的安装目录，`<plugin-root>` 指插件根目录。
 
 本技能统筹因子从研究来源、定义设计、实现、审查、计算、验证、评估、效果改进、发布到生产更新的流程，明确阶段顺序、进入条件、交付物和返工路径。各阶段按对应技能执行。因子包是最小发布和更新单位，包内声明列共同计算、共同更新，并整体发布。
 
 ## 项目配置与参数
 
-在目标项目准备 Python 环境和 `.env`，配置数据、因子源码及产物目录，配置项见 [`.env.example`](../../.env.example)。使用独立工作树时，共享数据目录可配置为绝对路径。
+在目标项目准备 Python 环境和 `.env`，配置数据、因子源码及产物目录，配置项见 [`.env.example`](../factor-protocol/.env.example)。阶段设置见对应 Skill 的配置示例，当前因子名称见[工作流配置](.env.example)。使用独立工作树时，共享数据目录可配置为绝对路径。
 
 按[数据读取说明](../factor-protocol/references/data-access.md)查看实际表目录、字段、分区和样本。根据研究目标选择数据，并在因子 README 确定字段、时间对齐、预热和输出范围。阶段脚本用 `--project-root` 指定项目，`--factor-name` 指定因子包；Evaluate 使用 `--factor-package`。`.env` 仅保存在本地。
 
