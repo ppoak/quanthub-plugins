@@ -11,13 +11,13 @@ description: 提供策略框架的核心模型、四层契约、成交事实存�
 
 ## 安装
 
-先检查项目是否已有所需包，缺少或需更新版本时，在已有 uv 项目目录运行。将 `<tag>` 替换为所用插件的版本标签：
+先检查项目已有的 Python 包。缺少或需更新时，从 [Releases](https://github.com/ppoak/quanthub-plugins/releases) 选择 `base-strategy@版本号`，在已有 uv 项目目录安装对应 wheel：
 
 ```sh
-uv add "base-strategy @ git+https://github.com/ppoak/quanthub-plugins.git#subdirectory=strategy-lab/skills/base-strategy" --tag "<tag>"
+uv add "base-strategy @ https://github.com/ppoak/quanthub-plugins/releases/download/base-strategy@<base-strategy-version>/base_strategy-<base-strategy-version>-py3-none-any.whl"
 ```
 
-仅使用 Python 包无需安装插件。保留项目的 `pyproject.toml` 和 `uv.lock`，其他环境运行 `uv sync --locked`。不要重建已有环境或覆盖项目配置。
+将命令中的版本占位符替换为实际发布版本，不带 `v`；文件名以 Release 附件为准。仅使用 Python 包无需安装插件。保留项目的 `pyproject.toml` 和 `uv.lock`，其他环境运行 `uv sync --locked`。复用已有环境和配置。
 
 需要 Excel 导出时，将安装命令中的 `base-strategy @` 改为 `base-strategy[excel] @`。
 
