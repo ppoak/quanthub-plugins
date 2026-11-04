@@ -22,29 +22,25 @@
 
 ## 安装与环境
 
-插件采用 Agent Plugins 1.0 格式，可单独分发本目录。Codex CLI 安装示例：
+插件采用 Agent Plugins 1.0 格式，可单独分发本目录。以下命令使用 PowerShell，先取得最新 `main` 的完整提交号，再安装插件：
 
-```sh
-codex plugin marketplace add https://github.com/ppoak/quanthub-plugins.git --ref main
+```powershell
+$revision = (git ls-remote https://github.com/ppoak/quanthub-plugins.git refs/heads/main).Split()[0]
+codex plugin marketplace add https://github.com/ppoak/quanthub-plugins.git --ref $revision
 codex plugin add factor-research@quanthub
 ```
 
 下文 `<plugin-root>` 为安装后的插件目录，`<project-root>` 为保存配置、数据、因子源码和产物的项目目录。Skill 文档中的 `<skill-root>` 指该 Skill 的实际安装目录。
 
-使用 Python 3.12 或更新版本和 `uv`。在目标项目中准备环境：
+使用 Python 3.12 或更新版本和 `uv`。在目标项目目录执行以下命令；新项目先运行 `uv init --bare --python 3.12`：
 
-```sh
-uv venv .venv
+```powershell
+uv add "factor-protocol @ git+https://github.com/ppoak/quanthub-plugins.git@${revision}#subdirectory=factor-research/skills/factor-protocol" "factor-compose @ git+https://github.com/ppoak/quanthub-plugins.git@${revision}#subdirectory=factor-research/skills/factor-compose" "matplotlib>=3.9.0"
 ```
 
-然后在插件目录安装依赖；`<project-root>` 使用绝对路径：
+`$revision` 沿用上方安装插件时取得的完整提交号。两个 Python 包从该提交构建并安装到项目 `.venv`，不使用插件缓存的 editable 安装。只需公共接口时，可仅安装 `factor-protocol`；无需安装 Agent 或插件，只需先运行上方取得 `$revision` 的命令。
 
-```sh
-cd "<plugin-root>"
-uv export --frozen --no-emit-project | uv pip install --python "<project-root>/.venv/Scripts/python.exe" -r -
-```
-
-导出的依赖包含插件内的 `factor_protocol` 和 `factor_compose`，以 editable 方式安装；相对安装路径以插件目录为基准。Linux／macOS 使用 `.venv/bin/python`。在 QuantHub 仓库中开发时，直接在仓库根目录运行 `uv sync`。
+提交目标项目的 `pyproject.toml` 和 `uv.lock`，其他环境运行 `uv sync --locked`。第三方依赖以目标项目的锁文件为准。更新时重新取得提交号，同时更新插件和 Python 包。
 
 合成模型需要的额外库按模型实现安装。发布和同步 GitHub 记录还需 Git、GitHub CLI 及已授权账号。
 
@@ -80,7 +76,7 @@ Update 以因子实际使用的数据分区和日历确定新增日期，由项�
 
 ## 问题处理与维护
 
-- 无法导入公共包：检查当前 Python 环境和安装后的插件目录，重新安装依赖。
+- 无法导入公共包：检查当前 Python 环境和项目中记录的 Git 提交，运行 `uv sync --locked`。
 - 表或字段不存在：查看实际目录、字段及样本，按因子定义调整实现。
 - 没有新增输出：检查因子使用的数据范围、预热期和现有输出日期。
 - 验证、评估或历史一致性检查失败：按对应 Skill 查看终端和产物中的失败记录。

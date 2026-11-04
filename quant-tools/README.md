@@ -13,10 +13,11 @@
 
 在 ChatGPT／Codex 的仓库插件目录中选择 QuantHub 下的 `quant-tools`。仓库登记文件为 `.agents/plugins/marketplace.json`；单独分发本插件时，在所用客户端登记插件目录。其他实现该标准的客户端使用各自的插件安装入口。
 
-Codex CLI 可登记本地仓库并安装：
+以下命令使用 PowerShell，先取得最新 `main` 的完整提交号，再安装插件：
 
-```sh
-codex plugin marketplace add https://github.com/ppoak/quanthub-plugins.git --ref main
+```powershell
+$revision = (git ls-remote https://github.com/ppoak/quanthub-plugins.git refs/heads/main).Split()[0]
+codex plugin marketplace add https://github.com/ppoak/quanthub-plugins.git --ref $revision
 codex plugin add quant-tools@quanthub
 ```
 
@@ -24,25 +25,27 @@ codex plugin add quant-tools@quanthub
 
 ## Python 环境
 
-使用 Python 3.12 或更新版本和 `uv`。在目标项目目录中，首次创建虚拟环境：
+使用 Python 3.12 或更新版本和 `uv`。仅下载报告无需额外 Python 依赖，在目标项目运行 `uv venv .venv --python 3.12` 即可。
 
-```sh
-uv venv .venv
+数据库工具没有独立 Python 包，按安装插件时的 `$revision` 获取源码和锁文件。`<source-root>` 使用独立的绝对路径；已有克隆时先 `git -C "<source-root>" fetch origin`，再切换提交：
+
+```powershell
+git clone https://github.com/ppoak/quanthub-plugins.git "<source-root>"
+git -C "<source-root>" checkout --detach $revision
+uv export --project "<source-root>/quant-tools" --frozen --no-emit-project --no-hashes --output-file "<source-root>/quant-tools/requirements.txt"
 ```
 
-仅下载报告时，直接使用该 Python 环境即可。数据库工具使用插件锁定的依赖：
+在目标项目目录导入这些固定版本依赖；新项目先运行 `uv init --bare --python 3.12`：
 
-```sh
-uv export --project "<plugin-root>" --frozen --no-emit-project | uv pip install --python .venv/Scripts/python.exe -r -
+```powershell
+uv add -r "<source-root>/quant-tools/requirements.txt"
 ```
 
-RiceQuant 与 Hugging Face 备份分别增加 `--group ricequant`、`--group backup`；同时使用两者时：
+RiceQuant 与 Hugging Face 备份分别在 `uv export` 中增加 `--group ricequant`、`--group backup`，也可同时指定。提交目标项目的 `pyproject.toml` 和 `uv.lock`，其他环境运行 `uv sync --locked`。更新时重新取得提交号，同时更新插件、导出并导入依赖。
 
-```sh
-uv export --project "<plugin-root>" --frozen --no-emit-project --group ricequant --group backup | uv pip install --python .venv/Scripts/python.exe -r -
-```
+下文脚本使用项目 `.venv`；Linux／macOS 将 `.venv/Scripts/python` 替换为 `.venv/bin/python`。
 
-Linux／macOS 使用 `.venv/bin/python`。RiceQuant 本地采集还需 Chrome、账号和服务器 notebook；发现报告签名需要 OpenSSL 或 Node.js，也可直接提供授权下载地址。来源要求见对应 Skill。
+RiceQuant 本地采集还需 Chrome、账号和服务器 notebook；发现报告签名需要 OpenSSL 或 Node.js，也可直接提供授权下载地址。来源要求见对应 Skill。
 
 ## 项目配置与运行
 
