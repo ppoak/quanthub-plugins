@@ -5,7 +5,7 @@ description: 根据报告来源调用对应脚本下载并校验研究报告 PDF
 
 # 报告下载
 
-复用项目已有的 Python 3.12+ 环境，无需额外安装 Python 库。将[配置示例](.env.example)中所需项补充到项目 `.env`，保留已有设置。`<path-to-skill>` 指本 Skill 的安装目录。
+复用项目已有的 Python 3.12+ 环境，无需额外安装 Python 库。将[配置示例](assets/.env.example)中所需项补充到项目 `.env`，保留已有设置。`<path-to-skill>` 指本 Skill 的安装目录。
 
 下载发现报告时，生成下载授权需要 OpenSSL 或 Node.js；也可直接使用授权下载地址。
 
