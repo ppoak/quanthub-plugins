@@ -19,7 +19,7 @@ Evaluate 完成且用户同意发布后，在项目根目录激活项目虚拟�
 uv run --locked python "<path-to-skill>/scripts/run_publish.py" --help
 ~~~
 
-目录读取 `.env` 的 `FACTORZOO`、`DATA`、`ARTIFACTS`，见 [`.env.example`](../factor-protocol/.env.example)。用 `--dry-run` 核对输入并查看上传计划，不修改远端或验收状态。
+目录读取 `.env` 的 `FACTORZOO`、`DATA`、`ARTIFACTS`，见 [`.env.example`](../factor-protocol/assets/.env.example)。用 `--dry-run` 核对输入并查看上传计划，不修改远端或验收状态。
 
 目标 Release 必须由 Design 创建，tag 与包名一致且非 Draft，保留参考 PDF 或经用户确认的缺失记录。
 

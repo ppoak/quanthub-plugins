@@ -61,7 +61,7 @@ Review 不修改因子实现、定义或包内配置。结论、证据和交接�
 - `fail`：列出最小修复项并退回 `factor-develop`；
 - 定义或数据口径不清时，暂停审核并请求决策。
 
-交接前核对并补齐项目 `.env` 的目录、阶段日期和默认参数，确保 `FACTOR_WORKFLOW_NAME` 与目标因子一致；配置见[示例](../factor-protocol/.env.example)。回复中将实际因子名称和日期填入下列命令，Calculate 的资源参数在 Benchmark 通过后按结果填写。后续阶段由用户运行，Agent 在用户请求诊断或修复时再介入。
+交接前核对并补齐项目 `.env` 的目录、阶段日期和默认参数，确保 `FACTOR_WORKFLOW_NAME` 与目标因子一致；配置见[示例](../factor-protocol/assets/.env.example)。回复中将实际因子名称和日期填入下列命令，Calculate 的资源参数在 Benchmark 通过后按结果填写。后续阶段由用户运行，Agent 在用户请求诊断或修复时再介入。
 
 ## 后续执行
 
