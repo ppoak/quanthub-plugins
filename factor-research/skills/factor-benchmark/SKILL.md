@@ -17,7 +17,7 @@ Review、Validate 通过后，在项目根目录使用已有环境运行。参�
 uv run --locked python "<path-to-skill>/scripts/run_benchmark.py" --help
 ~~~
 
-一次调用完成全部候选与单日追加测试。候选使用相同的输出区间、线程和内存限制；运行前确认 `.env` 的 `FACTOR_WORKFLOW_NAME` 与目标因子一致，目录配置见 [`.env.example`](.env.example)。
+一次调用完成全部候选与单日追加测试。候选使用相同的输出区间、线程和内存限制；运行前确认 `.env` 的 `FACTOR_WORKFLOW_NAME` 与目标因子一致，目录配置见 [`.env.example`](assets/.env.example)。
 
 ## 结果与验收
 
