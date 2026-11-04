@@ -53,5 +53,3 @@ uv run --locked python "<plugin-root>/skills/eastmoney-strategy/examples/example
 - 回测结果不符：检查信号时间、行情顺序、成交价格、T+1、费用和滑点。
 - 东财认证失败：核对配置、目标组合和报错信息。
 - 账户或成交不一致：刷新平台数据，再核对订单、成交和本地记录。
-
-东财 `live=False` 可预览委托，查询账户或扫码登录仍会连接平台。`live=True` 会实际提交或撤销模拟盘委托，操作前确认账户和交易意图。
