@@ -9,7 +9,7 @@ description: 评估因子包或已有评分数据，计算 IC、组合收益和�
 
 在项目根目录使用 `uv run --locked python` 运行 `scripts/run_evaluate.py`。参数默认读取 `.env`，命令行参数优先。完整参数见 `--help`，环境配置见[评估配置](references/evaluation-settings.md)。
 
-绘图需要 `matplotlib`，项目缺少时运行 `uv add "matplotlib>=3.9.0"`。默认设置见[配置示例](.env.example)，只将需要调整的项写入项目 `.env`。
+绘图需要 `matplotlib`，项目缺少时运行 `uv add "matplotlib>=3.9.0"`。默认设置见[配置示例](assets/.env.example)，只将需要调整的项写入项目 `.env`。
 
 ## 用法
 
