@@ -8,7 +8,7 @@
       "name": "quant-tools",
       "source": {
         "source": "local",
-        "path": "./quant-tools"
+        "path": "./plugins/quant-tools"
       },
       "policy": {
         "installation": "AVAILABLE",
@@ -20,7 +20,7 @@
       "name": "factor-research",
       "source": {
         "source": "local",
-        "path": "./factor-research"
+        "path": "./plugins/factor-research"
       },
       "policy": {
         "installation": "AVAILABLE",
@@ -32,7 +32,7 @@
       "name": "strategy-lab",
       "source": {
         "source": "local",
-        "path": "./strategy-lab"
+        "path": "./plugins/strategy-lab"
       },
       "policy": {
         "installation": "AVAILABLE",
