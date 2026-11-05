@@ -8,7 +8,7 @@
       "name": "quant-tools",
       "source": {
         "source": "local",
-        "path": "./quant-tools"
+        "path": "./plugins/quant-tools"
       },
       "policy": {
         "installation": "AVAILABLE",
