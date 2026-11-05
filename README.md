@@ -6,7 +6,7 @@
 | --- | --- | --- |
 | Quant Tools | 采集、更新和备份数据，下载研究报告 | [数据维护](plugins/quant-tools/skills/database-maintenance/SKILL.md) · [报告下载](plugins/quant-tools/skills/report-download/SKILL.md) |
 | Factor Research | 开发、检验、评估和合成因子 | [因子研究](plugins/factor-research/skills/factor-workflow/SKILL.md) · [因子合成](plugins/factor-research/skills/factor-compose/SKILL.md) |
-| Strategy Lab | 编写策略、回测 A 股，连接东财模拟组合 | [策略基础](strategy-lab/skills/base-strategy/SKILL.md) · [A 股回测](strategy-lab/skills/ashare-backtest-strategy/SKILL.md) · [东财模拟组合](strategy-lab/skills/eastmoney-strategy/SKILL.md) |
+| Strategy Lab | 编写策略、回测 A 股，连接东财模拟组合 | [策略基础](plugins/strategy-lab/skills/base-strategy/SKILL.md) · [A 股回测](plugins/strategy-lab/skills/ashare-backtest-strategy/SKILL.md) · [东财模拟组合](plugins/strategy-lab/skills/eastmoney-strategy/SKILL.md) |
 
 ## 安装插件
 

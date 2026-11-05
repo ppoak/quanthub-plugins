@@ -32,7 +32,7 @@
       "name": "strategy-lab",
       "source": {
         "source": "local",
-        "path": "./strategy-lab"
+        "path": "./plugins/strategy-lab"
       },
       "policy": {
         "installation": "AVAILABLE",
