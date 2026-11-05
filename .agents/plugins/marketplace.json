@@ -20,7 +20,7 @@
       "name": "factor-research",
       "source": {
         "source": "local",
-        "path": "./factor-research"
+        "path": "./plugins/factor-research"
       },
       "policy": {
         "installation": "AVAILABLE",
