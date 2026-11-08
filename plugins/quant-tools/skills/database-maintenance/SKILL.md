@@ -113,7 +113,7 @@ uv run --locked python "<path-to-skill>/scripts/scheduler.py" --run-once eastmon
 | `xueqiu_social_count` | `22:30` | 配置日期 | `scripts/xueqiu/fetch_xueqiu_social_count.py` |
 | `xueqiu_hot_rank` | `23:00` | 配置日期 | `scripts/xueqiu/fetch_xueqiu_hot_rank.py` |
 | `xueqiu_status` | `01:30` | 配置日期 | `scripts/xueqiu/fetch_xueqiu_status.py` |
-| `xueqiu_relogin` | `02:00` | 配置日期 | `scripts/xueqiu/email_relogin.py` |
+| `xueqiu_relogin` | `22:00` | 配置日期 | `scripts/xueqiu/email_relogin.py` |
 | `huggingface_backup` | `04:00` | 配置日期 | `scripts/huggingface/sync_huggingface_bucket.py` |
 
 调度参数、凭据和通知配置放在项目根目录 `.env`：
@@ -142,7 +142,7 @@ SMTP_PORT=465
 SMTP_USE_SSL=1
 XUEQIU_LOGIN_PHONES=<phone1>,<phone2>
 XUEQIU_LOGIN_EMAILS=<reply-mailbox1>,<reply-mailbox2>
-XUEQIU_RELOGIN_SCHEDULE_TIME=02:00
+XUEQIU_RELOGIN_SCHEDULE_TIME=22:00
 XUEQIU_RELOGIN_SCHEDULE_DAYS=all
 XUEQIU_RELOGIN_THRESHOLD_DAYS=5
 XUEQIU_RELOGIN_TIMEOUT=600

@@ -406,7 +406,7 @@ def build_jobs() -> dict[str, JobSpec]:
         "xueqiu_relogin": JobSpec(
             name="xueqiu_relogin",
             schedule_time=parse_schedule_time(
-                os.getenv("XUEQIU_RELOGIN_SCHEDULE_TIME", "02:00"),
+                os.getenv("XUEQIU_RELOGIN_SCHEDULE_TIME", "22:00"),
                 "XUEQIU_RELOGIN_SCHEDULE_TIME",
             ),
             schedule_days=parse_schedule_days(
