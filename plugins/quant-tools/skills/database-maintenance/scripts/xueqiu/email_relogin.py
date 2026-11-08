@@ -34,16 +34,30 @@ def _jwt_expiry(id_token: str) -> int | None:
         return None
 
 
+def load_login_status(path: str | Path = LOGIN_STATUS_PATH) -> list[dict]:
+    status_path = Path(path)
+    if not status_path.exists():
+        return []
+    data = json.loads(status_path.read_text(encoding="utf-8"))
+    if isinstance(data, dict) and isinstance(data.get("accounts"), list):
+        return [item for item in data["accounts"] if isinstance(item, dict)]
+    return [data] if isinstance(data, dict) and "token_index" in data else []
+
+
 def save_login_status(*, token_index: int, phone: str, cookies: list[dict], status: str) -> None:
     AUTH_ROOT.mkdir(parents=True, exist_ok=True)
     id_token = next((item["value"] for item in cookies if item["name"] == "xq_id_token"), "")
-    data = {
+    record = {
         "token_index": token_index,
         "phone_suffix": phone[-4:],
         "status": status,
         "last_verified_at": datetime.now(timezone.utc).replace(microsecond=0).isoformat(),
         "xq_id_token_exp": _jwt_expiry(id_token),
     }
+    accounts = [item for item in load_login_status() if item.get("token_index") != token_index]
+    accounts.append(record)
+    accounts.sort(key=lambda item: int(item.get("token_index", 0)))
+    data = {"accounts": accounts}
     temporary = LOGIN_STATUS_PATH.with_suffix(".tmp")
     temporary.write_text(json.dumps(data, ensure_ascii=True, indent=2) + "\n", encoding="utf-8")
     temporary.replace(LOGIN_STATUS_PATH)
@@ -115,6 +129,52 @@ def request_code_then_wait(timeout_seconds: int = 600, *, recipient: str | None 
     request_id, message_id = send_code_request(recipient=recipient)
     time.sleep(30)
     return wait_for_code(timeout_seconds, request_id=request_id, message_id=message_id, reply_mailbox=recipient)
+
+
+def configured_login_targets() -> list[tuple[int, str, str]]:
+    phones = _ordered_values("XUEQIU_LOGIN_PHONES")
+    recipients = _ordered_values("XUEQIU_LOGIN_EMAILS")
+    return [
+        (index, phone, recipients[index])
+        for index, phone in enumerate(phones)
+        if index < len(recipients)
+    ]
+
+
+def expiring_login_targets(threshold_days: int = 5) -> list[tuple[int, str, str]]:
+    now = int(datetime.now(timezone.utc).timestamp())
+    threshold = now + threshold_days * 24 * 60 * 60
+    records = {int(item["token_index"]): item for item in load_login_status() if "token_index" in item}
+    targets = []
+    for token_index, phone, recipient in configured_login_targets():
+        record = records.get(token_index)
+        if not record:
+            continue
+        if record.get("status") == "relogin_required":
+            targets.append((token_index, phone, recipient))
+            continue
+        expiry = record.get("xq_id_token_exp")
+        if expiry is not None and int(expiry) <= threshold:
+            targets.append((token_index, phone, recipient))
+    return targets
+
+
+def scheduled_relogin(*, threshold_days: int = 5, total_timeout_seconds: int = 600) -> bool:
+    targets = expiring_login_targets(threshold_days)
+    if not targets:
+        print("xueqiu_relogin_targets=0")
+        return True
+    success = True
+    for token_index, phone, recipient in targets:
+        print(f"xueqiu_relogin_start token_index={token_index} phone_suffix={phone[-4:]}")
+        if not playwright_relogin(
+            phone,
+            token_index=token_index,
+            recipient=recipient,
+            total_timeout_seconds=total_timeout_seconds,
+        ):
+            success = False
+    return success
 
 
 def replace_token_in_env(token: str, token_index: int = 0, env_path: str | Path = ".env") -> None:
@@ -216,12 +276,18 @@ def _ordered_values(name: str) -> list[str]:
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Run a manual email-assisted Xueqiu re-login.")
-    parser.add_argument("phone", help="Xueqiu login phone number")
+    parser.add_argument("phone", nargs="?", help="Xueqiu login phone number")
+    parser.add_argument(
+        "--check-expiring",
+        action="store_true",
+        help="Relogin configured accounts whose ID token expires within the threshold.",
+    )
     parser.add_argument("--token-index", type=int, help="Token position in XUEQIU_TOKENS (zero-based)")
     parser.add_argument("--recipient", help="Email address used for the verification-code reply")
     parser.add_argument("--env-path", default=".env", help="Project dotenv path")
     parser.add_argument("--profile-dir", help="Persistent Playwright browser profile directory")
     parser.add_argument("--timeout", type=int, default=600, help="Maximum login wait in seconds")
+    parser.add_argument("--threshold-days", type=int, default=5, help="Expiry threshold for --check-expiring")
     return parser.parse_args(argv)
 
 
@@ -250,6 +316,15 @@ def resolve_login_target(args: argparse.Namespace) -> tuple[int, str | None]:
 def main(argv: list[str] | None = None) -> int:
     args = parse_args(argv)
     load_dotenv(args.env_path)
+    if args.check_expiring:
+        if args.phone or args.token_index is not None or args.recipient:
+            raise ValueError("--check-expiring cannot be combined with phone, --token-index, or --recipient")
+        return 0 if scheduled_relogin(
+            threshold_days=args.threshold_days,
+            total_timeout_seconds=args.timeout,
+        ) else 1
+    if not args.phone:
+        raise ValueError("phone is required unless --check-expiring is used")
     token_index, recipient = resolve_login_target(args)
     profile_dir = args.profile_dir or str(Path(args.env_path).resolve().parent / DEFAULT_PROFILE_DIR)
     success = playwright_relogin(
