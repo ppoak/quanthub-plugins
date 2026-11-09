@@ -101,27 +101,50 @@ def wait_for_code(timeout_seconds: int = 600, *, request_id: str, message_id: st
     port = int(os.environ.get("XUEQIU_IMAP_PORT", "993"))
     sender = reply_mailbox or os.environ.get("XUEQIU_AUTH_EMAIL_TO", os.environ["DATABASE_MAINTENANCE_EMAIL_TO"])
     deadline = time.monotonic() + timeout_seconds
+    poll = 0
     while time.monotonic() < deadline:
-        with imaplib.IMAP4_SSL(server, port) as mailbox:
+        poll += 1
+        log_progress("checking_inbox", poll=poll)
+        with imaplib.IMAP4_SSL(server, port, timeout=30) as mailbox:
             mailbox.login(username, password)
-            mailbox.select("INBOX")
-            status, data = mailbox.search(None, "UNSEEN")
-            if status == "OK":
-                for message_id in reversed(data[0].split()):
-                    _, raw = mailbox.fetch(message_id, "(RFC822)")
-                    message = message_from_bytes(raw[0][1])
-                    if parseaddr(message.get("From", ""))[1].lower() != sender.lower():
+            mailbox.select("INBOX", readonly=True)
+            status, data = mailbox.search(None, "FROM", f'"{sender}"')
+            if status != "OK":
+                raise RuntimeError("IMAP inbox search failed")
+            candidates = data[0].split()
+            log_progress("inbox_checked", sender_messages=len(candidates))
+            for sequence_id in reversed(candidates):
+                status, raw = mailbox.fetch(sequence_id, "(BODY.PEEK[])")
+                if status != "OK":
+                    raise RuntimeError("IMAP message fetch failed")
+                message = message_from_bytes(raw[0][1])
+                if parseaddr(message.get("From", ""))[1].lower() != sender.lower():
+                    continue
+                subject = "".join(
+                    part.decode(charset or "utf-8", errors="replace") if isinstance(part, bytes) else part
+                    for part, charset in decode_header(message.get("Subject", ""))
+                )
+                thread = f"{message.get('In-Reply-To', '')} {message.get('References', '')}"
+                if request_id not in subject and message_id not in thread:
+                    continue
+                log_progress("reply_matched", request_id=request_id)
+                for part in message.walk():
+                    if part.get_content_type() not in {"text/plain", "text/html"}:
                         continue
-                    subject = message.get("Subject", "")
-                    thread = f"{message.get('In-Reply-To', '')} {message.get('References', '')}"
-                    if request_id not in subject and message_id not in thread:
+                    if part.get_content_disposition() == "attachment":
                         continue
-                    text = message.get_payload(decode=True) or b""
-                    match = CODE_PATTERN.search(text.decode("utf-8", "ignore"))
+                    payload = part.get_payload(decode=True) or b""
+                    body = payload.decode(part.get_content_charset() or "utf-8", errors="replace")
+                    if part.get_content_type() == "text/html":
+                        body = re.sub(r"<[^>]+>", "\n", body)
+                    # Only accept a code on its own line, never phone suffixes in quoted requests.
+                    match = re.search(r"(?m)^\s*(\d{4,6})\s*$", body)
                     if match:
-                        mailbox.store(message_id, "+FLAGS", "\\Seen")
+                        log_progress("verification_code_received")
                         return match.group(1)
-        time.sleep(15)
+                log_progress("reply_ignored", reason="no_standalone_verification_code")
+        log_progress("waiting_for_next_poll", interval_seconds=15)
+        time.sleep(min(15, max(0, deadline - time.monotonic())))
     raise TimeoutError("Timed out waiting for Xueqiu verification code email")
 
 
