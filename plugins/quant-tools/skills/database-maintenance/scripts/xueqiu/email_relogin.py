@@ -15,7 +15,6 @@ from datetime import datetime, timezone
 from email import message_from_bytes
 from email.header import decode_header
 from email.message import EmailMessage
-from email.utils import parseaddr
 from pathlib import Path
 
 
@@ -95,11 +94,11 @@ def send_code_request(phone: str = "", recipient: str | None = None) -> tuple[st
 
 
 def wait_for_code(timeout_seconds: int = 600, *, request_id: str, message_id: str, reply_mailbox: str | None = None) -> str:
+    """Match the login request regardless of sender; retain reply_mailbox for callers."""
     username = os.environ.get("XUEQIU_IMAP_USERNAME", os.environ["SENDER"])
     password = os.environ.get("XUEQIU_IMAP_PASSWORD", os.environ["EMAIL_PASSWORD"])
     server = os.environ.get("XUEQIU_IMAP_SERVER", "imap.qq.com")
     port = int(os.environ.get("XUEQIU_IMAP_PORT", "993"))
-    sender = reply_mailbox or os.environ.get("XUEQIU_AUTH_EMAIL_TO", os.environ["DATABASE_MAINTENANCE_EMAIL_TO"])
     deadline = time.monotonic() + timeout_seconds
     poll = 0
     while time.monotonic() < deadline:
@@ -108,24 +107,23 @@ def wait_for_code(timeout_seconds: int = 600, *, request_id: str, message_id: st
         with imaplib.IMAP4_SSL(server, port, timeout=30) as mailbox:
             mailbox.login(username, password)
             mailbox.select("INBOX", readonly=True)
-            status, data = mailbox.search(None, "FROM", f'"{sender}"')
+            status, data = mailbox.search(None, "ALL")
             if status != "OK":
                 raise RuntimeError("IMAP inbox search failed")
             candidates = data[0].split()
-            log_progress("inbox_checked", sender_messages=len(candidates))
+            log_progress("inbox_checked", inbox_messages=len(candidates))
             for sequence_id in reversed(candidates):
                 status, raw = mailbox.fetch(sequence_id, "(BODY.PEEK[])")
                 if status != "OK":
                     raise RuntimeError("IMAP message fetch failed")
                 message = message_from_bytes(raw[0][1])
-                if parseaddr(message.get("From", ""))[1].lower() != sender.lower():
-                    continue
                 subject = "".join(
                     part.decode(charset or "utf-8", errors="replace") if isinstance(part, bytes) else part
                     for part, charset in decode_header(message.get("Subject", ""))
                 )
                 thread = f"{message.get('In-Reply-To', '')} {message.get('References', '')}"
-                if request_id not in subject and message_id not in thread:
+                request_matches = re.search(rf"(?<![A-Za-z0-9]){re.escape(request_id)}(?![A-Za-z0-9])", subject)
+                if not request_matches and message_id not in re.findall(r"<[^>]+>", thread):
                     continue
                 log_progress("reply_matched", request_id=request_id)
                 for part in message.walk():
