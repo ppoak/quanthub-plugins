@@ -113,6 +113,7 @@ uv run --locked python "<path-to-skill>/scripts/scheduler.py" --run-once eastmon
 | `xueqiu_social_count` | `22:30` | 配置日期 | `scripts/xueqiu/fetch_xueqiu_social_count.py` |
 | `xueqiu_hot_rank` | `23:00` | 配置日期 | `scripts/xueqiu/fetch_xueqiu_hot_rank.py` |
 | `xueqiu_status` | `01:30` | 配置日期 | `scripts/xueqiu/fetch_xueqiu_status.py` |
+| `xueqiu_relogin` | `22:00` | 配置日期 | `scripts/xueqiu/email_relogin.py` |
 | `huggingface_backup` | `04:00` | 配置日期 | `scripts/huggingface/sync_huggingface_bucket.py` |
 
 调度参数、凭据和通知配置放在项目根目录 `.env`：
@@ -139,6 +140,12 @@ EMAIL_PASSWORD=<smtp-password>
 SMTP_SERVER=<smtp-server>
 SMTP_PORT=465
 SMTP_USE_SSL=1
+XUEQIU_LOGIN_PHONES=<phone1>,<phone2>
+XUEQIU_LOGIN_EMAILS=<reply-mailbox1>,<reply-mailbox2>
+XUEQIU_RELOGIN_SCHEDULE_TIME=22:00
+XUEQIU_RELOGIN_SCHEDULE_DAYS=all
+XUEQIU_RELOGIN_THRESHOLD_DAYS=5
+XUEQIU_RELOGIN_TIMEOUT=600
 ```
 
 `DATABASE_MAINTENANCE_ENABLED_JOBS` 和 `DATABASE_MAINTENANCE_RUN_ON_START` 支持 `all` 或逗号分隔的任务名。dry-run 时可将 `DATABASE_MAINTENANCE_NOTIFY=0` 设为静默运行。`DATABASE_MAINTENANCE_MISFIRE_GRACE_SECONDS` 设置长任务跨过后续任务时间时的补运行窗口。邮件发件凭据和收件人保存在 `.env`。

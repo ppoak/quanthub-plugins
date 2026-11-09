@@ -9,7 +9,8 @@
 | `scripts/xueqiu/fetch_xueqiu_hot_rank.py` | 采集热榜结果并写入日分区。 |
 | `scripts/xueqiu/fetch_xueqiu_status.py` | 采集雪球状态评论并写入日分区。 |
 | `scripts/xueqiu/fetch_xueqiu_cube_rebalance.py` | 采集组合调仓买卖次数并写入日分区。 |
-| `scripts/scheduler.py` | 统一登记四项任务，按设定日期和交易日运行采集脚本。 |
+| `scripts/xueqiu/email_relogin.py` | 保存认证状态，并按 ID token 临期状态执行邮件辅助重登录；同时提供可被外部 scheduler 调用的函数和 CLI。 |
+| `scripts/scheduler.py` | 统一登记雪球采集与认证任务，按设定日期和交易日运行。 |
 
 ## 访问配置
 
@@ -43,6 +44,12 @@ XUEQIU_STATUS_SLEEP=1.0
 XUEQIU_STATUS_RETRIES=1
 XUEQIU_STATUS_MAX_PAGES=20
 XUEQIU_STATUS_CANDIDATE_LIMIT=200
+XUEQIU_LOGIN_PHONES=<phone1>,<phone2>
+XUEQIU_LOGIN_EMAILS=<reply-mailbox1>,<reply-mailbox2>
+XUEQIU_RELOGIN_SCHEDULE_TIME=22:00
+XUEQIU_RELOGIN_SCHEDULE_DAYS=all
+XUEQIU_RELOGIN_THRESHOLD_DAYS=5
+XUEQIU_RELOGIN_TIMEOUT=600
 ```
 
 调度器在同一任务执行时间跨越后续任务的情况下，按 `DATABASE_MAINTENANCE_MISFIRE_GRACE_SECONDS` 配置的窗口补运行到期任务。
@@ -86,10 +93,10 @@ uv run --locked python "<path-to-skill>/scripts/xueqiu/fetch_xueqiu_cube_rebalan
 
 ```sh
 uv run --locked python "<path-to-skill>/scripts/scheduler.py" --list-jobs
-uv run --locked python "<path-to-skill>/scripts/scheduler.py" --run-once xueqiu_cube_rebalance xueqiu_social_count xueqiu_hot_rank xueqiu_status --date <YYYY-MM-DD> --dry-run
+uv run --locked python "<path-to-skill>/scripts/scheduler.py" --run-once xueqiu_relogin --date <YYYY-MM-DD> --dry-run
 ```
 
-采集脚本输出任务级运行记录；统一调度器在任务结束后发送成功或失败通知，并将当前任务日志附在邮件正文中。客户端在检测到认证错误时发送 token 失效提醒。
+`email_relogin.py --check-expiring` 会读取 `.tmp/database-maintenance/xueqiu-auth/login_status.json`，对 ID token 在阈值内到期的账号启动邮件辅助重登录；阈值默认五天。统一调度器通过 `xueqiu_relogin` 任务调用同一入口，外部 scheduler 也可以直接调用 `scheduled_relogin()`。采集脚本输出任务级运行记录；统一调度器在任务结束后发送成功或失败通知，并将当前任务日志附在邮件正文中。客户端在检测到认证错误时发送 token 失效提醒。
 
 ## 故障处理
 

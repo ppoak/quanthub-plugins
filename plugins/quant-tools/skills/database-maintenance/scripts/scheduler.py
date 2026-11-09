@@ -339,6 +339,14 @@ def _xueqiu_cube_args(target_date: dt.date) -> list[str]:
     ]
 
 
+def _xueqiu_relogin_args(_target_date: dt.date) -> list[str]:
+    return [
+        "--check-expiring",
+        "--threshold-days", os.getenv("XUEQIU_RELOGIN_THRESHOLD_DAYS", "5"),
+        "--timeout", os.getenv("XUEQIU_RELOGIN_TIMEOUT", "600"),
+    ]
+
+
 def _huggingface_args(_target_date: dt.date) -> list[str]:
     args = [
         "--data-root", configured_data_root("HUGGINGFACE_BACKUP_DATA_ROOT"),
@@ -394,6 +402,21 @@ def build_jobs() -> dict[str, JobSpec]:
             script_path="scripts/xueqiu/fetch_xueqiu_cube_rebalance.py",
             module_name="scripts.xueqiu.fetch_xueqiu_cube_rebalance",
             build_args=_xueqiu_cube_args,
+        ),
+        "xueqiu_relogin": JobSpec(
+            name="xueqiu_relogin",
+            schedule_time=parse_schedule_time(
+                os.getenv("XUEQIU_RELOGIN_SCHEDULE_TIME", "22:00"),
+                "XUEQIU_RELOGIN_SCHEDULE_TIME",
+            ),
+            schedule_days=parse_schedule_days(
+                os.getenv("XUEQIU_RELOGIN_SCHEDULE_DAYS", "all"),
+                "XUEQIU_RELOGIN_SCHEDULE_DAYS",
+            ),
+            require_trade_date=False,
+            script_path="scripts/xueqiu/email_relogin.py",
+            module_name="scripts.xueqiu.email_relogin",
+            build_args=_xueqiu_relogin_args,
         ),
         "ricequant": JobSpec(
             name="ricequant",
