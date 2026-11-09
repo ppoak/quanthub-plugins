@@ -184,7 +184,8 @@ def replace_token_in_env(token: str, token_index: int = 0, env_path: str | Path 
     output: list[str] = []
     for line in lines:
         if line.startswith("XUEQIU_TOKENS="):
-            values = [item.strip() for item in line.split("=", 1)[1].split(",")]
+            raw_values = line.split("=", 1)[1].strip().strip("\"'")
+            values = [item.strip() for item in raw_values.split(",")]
             while len(values) <= token_index:
                 values.append("")
             values[token_index] = token
