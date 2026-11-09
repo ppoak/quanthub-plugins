@@ -1,7 +1,7 @@
 {
   "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
   "name": "quant-tools",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "采集、维护和备份量化研究数据，下载并校验研究报告。",
   "author": {"name": "QuantHub"},
   "repository": "https://github.com/ppoak/quanthub-plugins",
