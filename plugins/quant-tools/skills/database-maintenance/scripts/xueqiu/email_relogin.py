@@ -202,6 +202,12 @@ def replace_token_in_env(token: str, token_index: int = 0, env_path: str | Path 
     temporary.replace(path)
 
 
+def log_progress(stage: str, **details: object) -> None:
+    timestamp = datetime.now().astimezone().isoformat(timespec="seconds")
+    fields = " ".join(f"{key}={value}" for key, value in details.items())
+    print(f"{timestamp} stage={stage} {fields}".rstrip(), flush=True)
+
+
 def playwright_relogin(
     phone: str,
     *,
@@ -213,49 +219,77 @@ def playwright_relogin(
 ) -> bool:
     from playwright.sync_api import sync_playwright
 
+    log_progress("started", phone_suffix=phone[-4:], token_index=token_index,
+                 timeout_seconds=total_timeout_seconds)
+    if total_timeout_seconds <= 0:
+        raise ValueError("Login timeout must be positive")
     proxy = os.environ.get("XUEQIU_PROXY")
+    attempt = 0
     deadline = time.monotonic() + total_timeout_seconds
     with sync_playwright() as playwright:
         while time.monotonic() < deadline:
+            attempt += 1
+            log_progress("sending_email", attempt=attempt)
             request_id, message_id = send_code_request(phone, recipient=recipient)
+            log_progress("email_sent", request_id=request_id, sms_delay_seconds=30)
             time.sleep(min(30, max(0, deadline - time.monotonic())))
             remaining = max(1, int(deadline - time.monotonic()))
+            log_progress("launching_browser")
             context = playwright.chromium.launch_persistent_context(
                 str(profile_dir),
                 executable_path="C:/Program Files/Google/Chrome/Application/chrome.exe",
                 headless=False,
                 proxy={"server": proxy} if proxy else None,
             )
+            stage = "opening_login_page"
+            log_progress(stage)
             try:
                 page = context.pages[0] if context.pages else context.new_page()
                 page.goto("https://www.xueqiu.com/account/login", wait_until="domcontentloaded", timeout=30_000)
                 page.wait_for_timeout(1_500)
+                stage = "filling_phone_and_agreement"
+                log_progress(stage)
                 page.locator("input[name=telephone]").first.fill(phone)
                 agreement = page.locator("label.modal__login__automatic_new:visible").first
                 agreement.locator("i").click()
                 if "nochecked" in (agreement.locator("i").get_attribute("class") or ""):
                     raise RuntimeError("Xueqiu agreement checkbox was not checked")
+                stage = "requesting_sms"
+                log_progress(stage)
                 page.get_by_text("发送验证码", exact=True).filter(visible=True).first.click()
+                stage = "waiting_for_email_reply"
+                log_progress(stage, remaining_seconds=remaining)
                 try:
                     code = wait_for_code(remaining, request_id=request_id, message_id=message_id, reply_mailbox=recipient)
                 except TimeoutError:
+                    log_progress("failed", reason="email_reply_timeout")
                     break
+                stage = "submitting_code"
+                log_progress(stage)
                 page.locator("input[placeholder=请输入验证码]:visible").first.fill(code)
                 page.locator(".modal__login__btn:visible").first.click()
                 page.wait_for_timeout(4_000)
                 cookies = context.cookies(["https://xueqiu.com"])
                 token = next((item["value"] for item in cookies if item["name"] == "xq_a_token"), "")
                 if token:
+                    stage = "saving_token"
+                    log_progress(stage)
                     replace_token_in_env(token, token_index=token_index, env_path=env_path)
                     save_login_status(token_index=token_index, phone=phone, cookies=cookies, status="valid")
-                    print("xueqiu_relogin_success=1")
+                    log_progress("completed", result="SUCCESS", token_saved=True)
+                    print("xueqiu_relogin_success=1", flush=True)
                     return True
-            except Exception:
-                pass
+                log_progress("attempt_failed", reason="token_not_returned")
+            except Exception as exc:
+                log_progress("attempt_failed", failed_stage=stage, error_type=type(exc).__name__)
+
             finally:
                 context.close()
+            if time.monotonic() < deadline:
+                log_progress("retrying", remaining_seconds=max(0, int(deadline - time.monotonic())))
     save_login_status(token_index=token_index, phone=phone, cookies=[], status="relogin_required")
-    print("xueqiu_relogin_success=0")
+    log_progress("completed", result="FAILED", reason="login_not_completed_before_deadline")
+    print("xueqiu_relogin_success=0", flush=True)
     return False
 
 
