@@ -1,7 +1,7 @@
 {
   "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
   "name": "factor-research",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "设计、开发、计算、验证、评估和合成量化因子，维护研究产物与增量更新。",
   "author": {"name": "QuantHub"},
   "repository": "https://github.com/ppoak/quanthub-plugins",
