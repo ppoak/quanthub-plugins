@@ -21,6 +21,16 @@ description: 评估因子包或已有评分数据，计算 IC、组合收益和�
 
 三种选择互斥。因子包默认评估全部声明列，可用 `--factor-column` 选择列；包名与数据目录名不同时，用 `--storage-factor-name` 指定目录名。直接评分需用 `--reference-factor` 指定参考因子，否则不计算参考相关性；因子包缺省使用项目的 `barra_cne5_styles` 和注册表 `core` 集合，也可用 `--reference-factor` 明确选择已有参考因子。
 
+`--direction` 指定方向，默认 `auto`，参数值不区分大小写：
+
+| 参数 | 含义 |
+| --- | --- |
+| `positive` | 高分为多头，适用于预测收益等已知方向的评分。 |
+| `negative` | 低分为多头。 |
+| `auto` | 按训练期原始 IC 均值定方向：大于零取高分，否则取低分；缺少有效训练期 IC 时报错。 |
+
+方向对全部处理方式生效，写入评估配置；测试期不参与定方向。修改方向后重新计算，不只重画图。
+
 `--task` 选择计算内容，可重复传入，省略时计算全部三项：
 
 | 参数 | 内容 | 文件 |
@@ -46,7 +56,7 @@ uv run --locked python "<path-to-skill>/scripts/run_evaluate.py" --factor-packag
 uv run --locked python "<path-to-skill>/scripts/run_evaluate.py" --factor-data artifacts/compositions/study/run_example/signals --factor-column score --task ic
 
 # Evaluate a score directory directly.
-uv run --locked python "<path-to-skill>/scripts/run_evaluate.py" --factor-data artifacts/compositions/study/run_example/signals --factor-column score --output-dir artifacts/evaluations/run_example
+uv run --locked python "<path-to-skill>/scripts/run_evaluate.py" --factor-data artifacts/compositions/study/run_example/signals --factor-column score --output-dir artifacts/evaluations/run_example --direction positive
 
 # Plot existing complete results.
 uv run --locked python "<path-to-skill>/scripts/run_evaluate.py" --factor-data artifacts/compositions/study/run_example/signals --factor-column score --output-dir artifacts/evaluations/run_example --operation plot

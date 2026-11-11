@@ -60,6 +60,7 @@ def _config_from_args(
         tasks=tuple(dict.fromkeys(args.task or ("ic", "portfolio", "correlation"))),
         storage_factor_name=args.storage_factor_name,
         factor_data=args.factor_data,
+        direction=args.direction,
         begin=args.begin,
         train_end=args.train_end,
         validation_end=args.validation_end,

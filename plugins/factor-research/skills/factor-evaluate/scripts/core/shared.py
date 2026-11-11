@@ -98,6 +98,7 @@ class EvaluationSettings:
     """User-adjustable evaluation defaults loaded from the project dotenv."""
 
     begin: str = DEFAULT_EVALUATION_BEGIN
+    direction: str = "auto"
     train_end: str = DEFAULT_TRAIN_END
     validation_end: str = DEFAULT_VALIDATION_END
     horizon_days: int = 5
@@ -141,6 +142,7 @@ class EvaluationSettings:
             return float(value(name, str(default)))
 
         settings = cls(
+            direction=value("FACTOR_EVALUATE_DIRECTION", "auto").lower(),
             begin=value("FACTOR_EVALUATE_BEGIN", DEFAULT_EVALUATION_BEGIN),
             train_end=value("FACTOR_EVALUATE_TRAIN_END", DEFAULT_TRAIN_END),
             validation_end=value(
@@ -204,6 +206,8 @@ class EvaluationSettings:
         return settings
 
     def validate(self) -> None:
+        if self.direction not in {"positive", "negative", "auto"}:
+            raise ValueError("direction must be positive, negative or auto")
         positive = {
             "horizon_days": self.horizon_days,
             "quantiles": self.quantiles,
@@ -403,6 +407,7 @@ class EvaluationConfig:
     factor_data: str | Path | None = None
     factor_module: str | None = None
     begin: str | None = DEFAULT_EVALUATION_BEGIN
+    direction: str = "auto"
     train_end: str = DEFAULT_TRAIN_END
     validation_end: str = DEFAULT_VALIDATION_END
     end: str | None = None
@@ -430,6 +435,8 @@ class EvaluationConfig:
     settings: EvaluationSettings | None = None
 
     def validate(self) -> None:
+        if self.direction not in {"positive", "negative", "auto"}:
+            raise ValueError("direction must be positive, negative or auto")
         if not self.tasks or set(self.tasks) - {"ic", "portfolio", "correlation"}:
             raise ValueError("tasks must select ic, portfolio or correlation")
         if self.factor_data is not None:

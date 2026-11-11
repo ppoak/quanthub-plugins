@@ -164,6 +164,7 @@ class _EvaluationStateMixin:
             "top_percentile": float(self.cfg.top_percentile),
             "rolling_mean_days": self.cfg.rolling_mean_days,
             "industry_level": self.cfg.neutralization_industry_level,
+            "direction": self.cfg.direction,
             "train_end": self.cfg.train_end,
             "validation_end": self.cfg.validation_end,
             "reference_factors": list(self.reference_factors),

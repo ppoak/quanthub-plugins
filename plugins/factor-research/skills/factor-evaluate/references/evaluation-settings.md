@@ -10,6 +10,7 @@
 
 | 变量 | 默认值 | 说明 |
 | --- | --- | --- |
+| `FACTOR_EVALUATE_DIRECTION` | `auto` | `positive` 取高分，`negative` 取低分；`auto` 根据训练期原始 IC 定方向，缺失时报错。 |
 | `FACTOR_EVALUATE_BEGIN` | `2014-01-01` | 评估起始日期。 |
 | `FACTOR_EVALUATE_TRAIN_END` | `2022-12-31` | 训练期结束日期。 |
 | `FACTOR_EVALUATE_VALIDATION_END` | `2024-12-31` | 验证期结束日期；测试期从下一交易日起至评估结束日期。评估结束日期默认取因子最新物化日期，可由 `--end` 指定。 |
