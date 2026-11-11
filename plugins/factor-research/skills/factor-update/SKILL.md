@@ -1,41 +1,74 @@
 ---
 name: factor-update
-description: 按项目现有数据增量更新 active 因子，并刷新验证和评估结果。
+description: 按项目现有数据增量更新指定因子包或 schema 配置块，并按需写回 README。
 ---
 
 # Factor Update
 
-运行前按 [Factor Protocol 安装说明](../factor-protocol/SKILL.md#安装)检查项目已有环境和依赖。`<path-to-skill>` 指本 Skill 的安装目录。
+运行前按 [Factor Protocol 安装说明](../factor-protocol/SKILL.md#安装)检查项目环境；更新包含评估刷新，还需检查 [Factor Evaluate 的依赖](../factor-evaluate/SKILL.md)。`<path-to-skill>` 为安装目录。
 
-本技能以因子包为最小更新单位，增量计算 `.env` 所配置注册表文件的 `active` 项中各包的全部声明列。定义变化、历史源分区改写或 schema 不安全时返回 `rebuild_required`，并交由 `factor-calculate` 显式重建。
+## 唯一命令入口
 
-更新会刷新评估结果，运行前同时检查 [Factor Evaluate 的依赖](../factor-evaluate/SKILL.md)。
+从项目根目录使用项目虚拟环境运行 `scripts/run_update.py`，参数以 `--help` 为准。
 
-入口与实现脚本平铺在 `scripts/` 下；运行时使用插件内的 Factor Protocol 和项目环境。
+`--target` 接受包名或 schema 配置块名，例如 market_cap、active、core。先匹配 `FACTORZOO_SCHEMA` 中的配置块，否则匹配因子包；空块或未知目标报错。配置块沿用 Factor Protocol 格式：active 使用包、指纹和完整列配置，core 等块使用列引用列表。引用按包去重，更新完整包。配置块指纹须与源码一致，列须存在；active 必须包含包内全部声明列。
 
-正式库的更新门禁、失败状态和可选调度配置见[生产增量更新说明](references/production-update.md)。
+## 任务与预览
 
-从项目根目录运行：
+`--task` 可以重复传入，去重后固定先 update、后 readme；省略时只执行 update。
 
-```sh
-uv run --locked python "<path-to-skill>/scripts/run_update.py" --project-root . --all --threads 1 --memory-limit 1GB --validation-memory-limit 1GB --temp-directory .tmp/factor_update
-uv run --locked python "<path-to-skill>/scripts/run_update.py" --project-root . --factor-name <factor_name> --dry-run
-```
+| 任务 | 行为 |
+| --- | --- |
+| `update` | 增量计算、独立验证、评估检查与绘图、保存运行报告；不修改 README |
+| `readme` | 使用已有完整评估结果及运行报告回写 README，不重新计算因子或评估指标 |
 
-在其他目录运行时，`--project-root` 指定数据项目；相对数据、因子库、临时和输出路径均从该根目录解析，正式验证和评估产物位于 `$ARTIFACTS/factor_zoo/`，`ARTIFACTS` 从项目 `.env` 读取。更新流程通过子进程调用插件内的 Calculate、Validate、Evaluate 脚本，检查 active 包级指纹、完整输出列清单和文件身份，采用 DuckDB 资源限制、逐因子释放内存及失败非零退出。
-
-`--all` 与 `--factor-name` 都只更新 `FACTORZOO_SCHEMA` 指定文件中 `active` 项列出的因子；每个条目的 `columns` 必须与该包的 `FACTOR_COLUMNS` 完整一致。
-
-调度中的验证调用使用 `--no-readme-update`，刷新 audit/config；需要更新 README 第 6 节时，单独执行 factor-validate 的标准脚本并检查差异。
-
-项目调度器按需调用本 Skill。更新范围由实际数据分区和因子声明的日历确定；数据查看方法见[因子数据读取](../factor-protocol/references/data-access.md)，调度方式见[生产增量更新说明](references/production-update.md)。
-
-真实更新成功后，`run_update.py` 调用同级 `readme.py`，回写因子 README 第 7 节 `factor-benchmark:results` 统一性能块内的最新增量更新记录，包含测试日期、输出日期、源起始日、线程、内存上限、每批交易日数、端到端墙钟耗时、更新进程树峰值 RSS、输出行数、状态和备注。记录覆盖本次更新的全部日期，成功的零输出更新记录行数为 0。源起始日取因子计算日志中的 `source_begin`；因子未输出该字段时显示 `—`。墙钟耗时和 RSS 覆盖计算、验证与评估刷新。`--dry-run`、`up_to_date` 和阻断/失败结果不生成新的实测记录；README 写回失败时命令返回非零，并保留最新测量。可单独重试 README 写回，不必重新运行更新：
+`--dry-run` 是独立预览开关，可与任何任务组合；只读取配置、产物和更新计划，不启动执行阶段、不恢复目录、不保存报告、不修改 README，也不创建临时目录。readme-only 预览要求已有报告；update + readme 预览会说明更新成功后将写回文档。
 
 ```sh
-uv run --locked python "<path-to-skill>/scripts/readme.py" --project-root . --factor-name <factor_name>
+# Update without README changes.
+uv run --locked python "<path-to-skill>/scripts/run_update.py" --target active
+
+# Update, then write README.
+uv run --locked python "<path-to-skill>/scripts/run_update.py" --target market_cap --task update --task readme
+
+# Rewrite existing reports only.
+uv run --locked python "<path-to-skill>/scripts/run_update.py" --target market_cap --task readme
+
+# Preview both tasks without writes.
+uv run --locked python "<path-to-skill>/scripts/run_update.py" --target core --task update --task readme --dry-run
 ```
 
-该脚本只读取 `.tmp/factor_update/<factor_name>/readme_result.json` 并替换对应标记区域；没有成功更新记录时会明确失败。`--no-readme-update` 同时禁用 Update 第 7 节和内部 Evaluate 刷新对 README 的修改。Update 记录说明本次增量更新的资源消耗；Factor Benchmark 用于比较固定区间内的不同批次规模。Update 仅替换统一性能块内的正式增量运行记录，保留批次与单日增量基准。
+## Benchmark 资源门禁
 
-启动检查使用 `uv run --locked python "<path-to-skill>/scripts/run_update.py" --help` 和 `uv run --locked python "<path-to-skill>/scripts/readme.py" --help`。
+每个包单独读取 README 第 7 节的标准 `factor-benchmark:results` 表；要求第 4 节第 5 项 Benchmark 验收已勾选、候选均已完成为 pass 或 oom、至少一个候选成功、单日追加通过、资源测量齐全且候选比较条件一致。只识别当前 Benchmark 脚本输出的列格式，不从历史自然语言中猜测。
+
+默认从成功候选按日均耗时、峰值 RSS、每批交易日数依次升序选择，与 Benchmark 的选择规则一致。选择依据为 README 中已保存的测量值，正式增量运行记录不参与候选选择。
+
+线程、内存和批次没有固定默认值，也没有包名特例。显式传入资源参数时，只能选择表内已经通过的完整参数组合；没有匹配组合、验收未通过、旧格式或记录缺失时，要求先运行 Factor Benchmark，禁止回退到 1 线程、1GB 或固定批次。内存必须记录显式限制，`DuckDB default` 不作为可跨运行复用的配置。
+
+同一配置块中的各包使用各自选出的配置；计算、验证和评估共用所选线程与内存设置。Benchmark 仅测量因子计算，不能据此保证独立验证和评估也一定满足资源要求；下游资源失败如实退出，不自动增加额度或跳过阶段。
+
+| 参数 | 默认值 | 用途 |
+| --- | --- | --- |
+| `--target` | 必填 | 因子包或 schema 块 |
+| `--task` | `update` | 可重复选择 update、readme |
+| `--dry-run` | 关闭 | 只预览，不执行写操作 |
+| `--project-root` | `.` | 项目根目录 |
+| `--threads` | 当前包的 Benchmark 配置 | 筛选已通过的线程数 |
+| `--memory-limit` | 当前包的 Benchmark 配置 | 筛选已通过的内存限制 |
+| `--compute-batch-days` | 最快成功候选 | 筛选已通过的批次 |
+| `--temp-directory` | 自动生成 | 临时计算目录，相对路径基于项目 |
+
+数据、源码、注册表和产物路径读取项目 `.env` 的 DATA、FACTORZOO、FACTORZOO_SCHEMA、ARTIFACTS。没有 operation、no-readme-update、初始化或跳过验证/评估的用户参数。初始物化、补算及重建使用 Factor Calculate。
+
+## 结果与失败处理
+
+Update 校验数据身份、schema、源分区改写与实际日历，增量区间从已有输出尾日之后开始；定义或数据身份变化返回 rebuild_required。没有新增日期也检查验证与评估。内部 Calculate、Validate 都不修改 README；Evaluate 在 update 任务中只计算、检查和绘图。
+
+更新提交后独立验证最近 5 个有输出日期，随后刷新全部声明列的评估。失败标记保存为 `.tmp/factor_update/<factor>/refresh_failed.json`；下次重试。只有更新成功才保存新的 `readme_result.json`，保存报告与写回 README 分离。文档失败保留报告，可用 `--task readme` 重试。
+
+readme 任务调用 Evaluate 的文档操作，写回评估结果，再将运行报告写入第 7 节；不会重新跑计算。正式增量记录覆盖本次区间、耗时、进程树 RSS、资源和行数，保留原有 Benchmark 表。零输出记录为 0 行。详见[生产增量更新](references/production-update.md)。
+
+## 实现结构
+
+`scripts/` 仅有 run_update.py 入口，内部代码位于 core：selection 选择目标；resources 解析并检验 Benchmark；models 定义配置、计划和结果；sources、preflight、planning 处理日历、数据门禁和规划；tasks 下 calculate、validate、evaluate、readme 分别适配阶段；workflow、refresh 编排单包；update 调度任务；state 保存刷新状态；process、monitor、report 负责子进程、测量及报告。

@@ -1,56 +1,50 @@
 # 生产增量更新
 
-本说明介绍 active 因子的更新条件、失败处理和调度配置。数据目录由项目 `.env` 的 `DATA` 指定，读取方法见[因子数据读取](../../factor-protocol/references/data-access.md)。`<path-to-skill>` 为 Factor Update 的安装目录。
+## 目标与资源
 
-## 执行入口
-
-在项目根目录激活项目虚拟环境后运行：
+唯一入口为 `<path-to-skill>/scripts/run_update.py`。目标使用 --target，任务使用可重复的 --task update/readme；--dry-run 独立控制只读预览。
 
 ```shell
-uv run --locked python "<path-to-skill>/scripts/run_update.py" --project-root . --all --dry-run
-uv run --locked python "<path-to-skill>/scripts/run_update.py" --project-root . --all --threads 1 --memory-limit 1GB --validation-memory-limit 1GB --temp-directory .tmp/factor_update
+uv run --locked python "<path-to-skill>/scripts/run_update.py" --target active --dry-run
+uv run --locked python "<path-to-skill>/scripts/run_update.py" --target market_cap --task update --task readme
 ```
 
-`--all` 更新 `FACTORZOO_SCHEMA` 的全部 active 包；`--factor-name` 更新其中指定的包。两种方式均核对包的源码指纹与完整声明列，并以包为单位执行。
+update 任务为每个包解析 README 的标准 Benchmark 候选及单日追加表，核验 Benchmark 验收并选择最快成功配置。没有固定线程、内存或批次默认值；显式参数也须匹配已通过的组合。缺失、未完成、资源记录不明确或旧格式均要求返回 Factor Benchmark。
 
-## 更新条件
+计算、验证和评估共用选定线程和内存；计算 Benchmark 不保证下游阶段一定成功。首次物化和历史补算仍属于 Calculate。全部参数及任务语义见 [Skill 入口](../SKILL.md)。
 
-已有因子数据须满足以下条件：
+## 更新门禁
 
-- `identity.json` 与当前计算指纹、列定义及整个历史摘要一致。相对路径、修改时间或文件内容变化，返回 `rebuild_required`，通过 Calculate 重算完整已存区间。
-- Parquet 输出列符合 `FACTOR_COLUMNS`；不符时返回 `schema_mismatch`，先重建数据。
-- 每列的 `config.json` 和 `audit.csv` 齐全，验证状态为 `pass`，验证尾日覆盖因子输出尾日。缺失或失败返回 `validation_failed`，覆盖不足返回 `validation_stale`。
+- 配置块中的指纹与源码一致，引用列必须存在。active 的列清单必须与包的全部声明列一致。
+- `identity.json` 与当前定义指纹、声明列、整个已有历史摘要一致。身份缺失或变化返回 `rebuild_required`，不自动接受新身份。
+- 现有数据抽样 schema 与声明列不符时返回 `schema_mismatch`。
+- 验证产物检查要求每列 config、非空 audit、pass 状态、正确的包身份、覆盖输出尾日的验证尾日及匹配的数据快照。缺失或失败为 `validation_failed`，日期或快照过期为 `validation_stale`。没有新增日期时也会按需重试验证。
 
-尚未物化的包返回 `uninitialized`；先完成历史计算，或用 `--bootstrap-begin` 指定初始化起点。dry-run 只报告计划和阻断原因。
+尚无物化数据的包返回 `uninitialized`，先使用 Factor Calculate 完成物化。`--dry-run` 不调用计算、验证、评估或报告写回。
 
 ## 日期与计算
 
-按实际因子尾日计算新增源日期。依赖多表共同日历的包声明 `UPDATE_CALENDAR = "quotes_common"` 和 `UPDATE_CALENDAR_TABLES`。因子按定义决定是否输出；末尾零输出日期可在后续更新中再次计算。
+根据实际因子尾日确定新增源日期。`UPDATE_CALENDAR` 指定源日历；`quotes_common` 对 `UPDATE_CALENDAR_TABLES` 的日期取交集。`UPDATE_SOURCE_FACTORS` 声明的上游因子也参与日历交集。
 
-声明 `UPDATE_SOURCE_TABLES` 的包会检查源分区的晚到改写；源数据改写影响已存结果时返回 `rebuild_required`，通过 Calculate 重算。
+声明 `UPDATE_SOURCE_TABLES`、共同日历或上游因子依赖时，检查最近 400 个源日期的源分区修改时间是否晚于同日因子输出。检测到改写返回 `rebuild_required`，不在 Update 内重建历史。该检查是现有修改时间检查，不等同完整上游内容快照。
 
-Calculate 在临时目录核对输出列、日期边界、唯一键和有限值，成功后统一提交 Parquet 与历史摘要。失败保留原数据；目录切换中断时，下次真实运行先恢复目录。
+Calculate 子进程负责暂存、输出列、日期边界、唯一键、有限值检查和原子提交，使用 `--require-values --no-readme-update`。失败保留原数据；真实运行前通过 Calculate 恢复中断目录。Update 的验证阶段另行执行，不依赖 Calculate 的 README 收尾模式。
+
+因子按定义决定是否输出；末尾零输出日期可能在后续更新中再次计算。返回的实际输出尾日取物化分区，评估目标尾日仍取上游日历尾日。
 
 ## 验证与评估
 
-计算提交后，独立验证最近 5 个有输出日期，并按本次上游结束日期刷新全部声明列的评估。Evaluate 对齐行情交易日，检查输入快照及指标摘要；有效结果复用，变化或损坏的结果重新计算。因子已到最新日期时也执行此检查。
+Calculate 成功后，Validate 复算最近 5 个有输出日期，保存 audit/config，不修改 README 第 6 节。验证成功后 Evaluate 刷新全部声明列，执行 evaluate、check、plot；readme 任务单独调用评估文档写回，update 本身不修改 README。
 
-验证或评估失败时非零退出，并写入 `.tmp/factor_update/<factor>/refresh_failed.json`；下次运行重试。全部后续检查通过才算更新完成。
+没有新增日期时也检查验证状态并刷新评估。后续阶段失败保存 `.tmp/factor_update/<factor>/refresh_failed.json`，命令非零退出，下次运行重试；此前已经提交的数据不回滚。
 
-## 调度与 README
+## 报告与调度
 
-项目调度器按需调用更新脚本：
-
-```shell
-uv run --locked python "<path-to-skill>/scripts/run_update.py" --project-root . --all
-```
-
-脚本直接读取因子使用的数据分区和交易日历，确定可更新日期；没有新增日期时检查现有验证和评估状态。多表因子按包内声明的日历与时间关联方式确定范围，低频数据按因子定义使用。
-
-成功更新后回写 README 第 7 节统一性能块中的正式增量运行记录，包含日期、资源、耗时、峰值 RSS、行数及状态。dry-run、`up_to_date` 和失败结果不生成实测记录。需要重试回写时运行：
+成功更新后仅保存测量报告，不修改 README。dry-run、up_to_date 和失败不生成新实测记录；readme 任务使用已有报告写回文档。
 
 ```shell
-uv run --locked python "<path-to-skill>/scripts/readme.py" --project-root . --factor-name <factor_name>
+uv run --locked python "<path-to-skill>/scripts/run_update.py" --target active --task update --task readme
+uv run --locked python "<path-to-skill>/scripts/run_update.py" --target market_cap --task readme
 ```
 
-`--no-readme-update` 跳过本阶段及内部 Evaluate 对 README 的回写。
+`--task readme` 使用完整已有评估产物和 `readme_result.json` 写回文档，不运行数据更新。项目调度器继续调用唯一的 run_update 入口。
