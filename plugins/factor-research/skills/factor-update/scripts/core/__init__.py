@@ -1,0 +1,2 @@
+"""Incremental factor update implementation."""
+
