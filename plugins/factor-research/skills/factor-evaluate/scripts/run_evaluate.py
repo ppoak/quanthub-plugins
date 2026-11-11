@@ -32,6 +32,7 @@ def add_arguments(parser: ArgumentParser) -> None:
     parser.add_argument("--begin", default=None)
     parser.add_argument("--train-end", default=None)
     parser.add_argument("--validation-end", default=None)
+    parser.add_argument("--direction", type=str.lower, choices=("positive", "negative", "auto"), default=None)
     parser.add_argument("--end", default=None)
     parser.add_argument("--horizon-days", type=int, default=None)
     parser.add_argument("--execution-lag-days", type=int, default=None)
@@ -89,6 +90,7 @@ def add_arguments(parser: ArgumentParser) -> None:
 
 def _apply_settings(args: Namespace, settings: EvaluationSettings) -> None:
     defaults = {
+        "direction": settings.direction,
         "begin": settings.begin,
         "train_end": settings.train_end,
         "validation_end": settings.validation_end,

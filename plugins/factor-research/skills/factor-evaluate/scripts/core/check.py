@@ -90,6 +90,8 @@ def check_evaluation_config(
         parameters
     ):
         raise ValueError(f"evaluation parameters are missing: {column_dir}")
+    if parameters.get("direction", "auto") not in {"positive", "negative", "auto"}:
+        raise ValueError(f"invalid evaluation direction: {column_dir}")
     try:
         begin = date.fromisoformat(evaluation["begin"])
         requested_end = date.fromisoformat(evaluation["requested_end"])

@@ -17,7 +17,17 @@ def selection_query(
     validation_end: str,
     ic_source: str,
     requested_source: str,
+    direction: str = "auto",
 ) -> str:
+    if direction not in {"positive", "negative", "auto"}:
+        raise ValueError("direction must be positive, negative or auto")
+    sign = {
+        "positive": "1",
+        "negative": "-1",
+        "auto": "CASE WHEN train.train_mean_ic IS NULL OR NOT isfinite(train.train_mean_ic) "
+                "THEN error('Auto direction requires finite training-period raw IC; specify positive or negative') "
+                "WHEN train.train_mean_ic > 0.0 THEN 1 ELSE -1 END",
+    }[direction]
     literal = FactorStorage.sql_literal
     variants = ", ".join(
         f"({literal(variant)}, {index})" for index, variant in enumerate(VARIANTS)
@@ -34,7 +44,7 @@ def selection_query(
                     COUNT(*) AS train_ic_days
                 FROM ({ic_source}) ic
                 JOIN requested USING (factor_column)
-                WHERE ic.variant = 'raw'
+                WHERE ic.variant = 'raw' AND isfinite(ic.ic)
                   AND ic.date >= CAST(
                       {literal(begin)} AS DATE
                   )
@@ -65,8 +75,7 @@ def selection_query(
                     requested.factor_column,
                     grid.variant,
                     grid.variant_order,
-                    CASE WHEN train.train_mean_ic > 0.0 THEN 1 ELSE -1 END
-                        AS direction_sign,
+                    {sign} AS direction_sign,
                     train.train_mean_ic,
                     COALESCE(train.train_ic_days, 0) AS train_ic_days,
                     validation.validation_mean_ic,
@@ -161,6 +170,7 @@ def read_selection_rows(
         WHERE TRY_CAST(ic AS DOUBLE) IS NOT NULL AND isfinite(TRY_CAST(ic AS DOUBLE))
     """
     query = selection_query(
+        direction=str(parameters.get("direction", "auto")),
         begin=begin,
         train_end=str(parameters["train_end"]),
         validation_end=str(parameters["validation_end"]),

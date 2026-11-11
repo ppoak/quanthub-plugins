@@ -45,6 +45,7 @@ class _EvaluationResultsMixin:
         self.storage.execute(
             "INSERT INTO _evaluation_selection "
             + selection_query(
+                direction=self.cfg.direction,
                 begin=self.begin,
                 train_end=self.cfg.train_end,
                 validation_end=self.cfg.validation_end,

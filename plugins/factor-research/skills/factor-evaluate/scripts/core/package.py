@@ -166,6 +166,7 @@ def refresh_evaluations(
                 parameters.get("industry_level", settings.neutralization_industry_level)
             ),
             references,
+            str(parameters.get("direction", "auto")),
         )
         groups.setdefault(key, []).append(column)
     results: list[Path] = []
@@ -182,11 +183,13 @@ def refresh_evaluations(
             rolling_mean_days,
             industry_level,
             references,
+            direction,
         ) = key
         result = run_package_evaluation(
             EvaluationConfig(
                 factor_name=factor_name,
                 storage_factor_name=storage_factor_name,
+                direction=direction,
                 begin=str(begin),
                 train_end=train_end,
                 validation_end=validation_end,
