@@ -71,4 +71,18 @@ readme 任务调用 Evaluate 的文档操作，写回评估结果，再将运行
 
 ## 实现结构
 
-`scripts/` 仅有 run_update.py 入口，内部代码位于 core：selection 选择目标；resources 解析并检验 Benchmark；models 定义配置、计划和结果；sources、preflight、planning 处理日历、数据门禁和规划；tasks 下 calculate、validate、evaluate、readme 分别适配阶段；workflow、refresh 编排单包；update 调度任务；state 保存刷新状态；process、monitor、report 负责子进程、测量及报告。
+`scripts/` 保留一个入口和六个核心模块，不再按每个步骤单独建文件：
+
+```text
+scripts/
+├── run_update.py       命令行参数与唯一入口
+└── core/
+    ├── config.py      配置与共享契约、目标选择、Benchmark 资源解析
+    ├── planning.py    源日历、已有数据与验证状态检查、更新计划
+    ├── update.py      批量调度、单包执行、下游刷新、失败状态处理
+    ├── tasks.py       各阶段参数适配及统一子进程调用
+    ├── report.py      运行报告保存、输出行数统计、文档渲染与写回
+    └── monitor.py     进程树内存采样
+```
+
+依赖方向为入口 → update → config / planning / tasks / report / monitor。planning 只负责判断需要做什么；update 负责执行顺序及失败处理；tasks 只负责调用其他 Skill，不实现因子计算、验证或评估算法。config 提供共享数据结构，report 不参与更新决策，monitor 不依赖业务模块。
