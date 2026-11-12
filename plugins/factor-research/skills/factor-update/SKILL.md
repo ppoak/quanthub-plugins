@@ -65,7 +65,7 @@ uv run --locked python "<path-to-skill>/scripts/run_update.py" --target core --t
 
 Update 校验数据身份、schema、源分区改写与实际日历，增量区间从已有输出尾日之后开始；定义或数据身份变化返回 rebuild_required。没有新增日期也检查验证与评估。内部 Calculate、Validate 都不修改 README；Evaluate 在 update 任务中只计算、检查和绘图。
 
-更新提交后独立验证最近 5 个有输出日期，随后刷新全部声明列的评估。失败标记保存为 `.tmp/factor_update/<factor>/refresh_failed.json`；下次重试。只有更新成功才保存新的 `readme_result.json`，保存报告与写回 README 分离。文档失败保留报告，可用 `--task readme` 重试。
+更新提交后，仅从本次更新区间的实际输出日期中选择最新至多 5 个日期独立验证：不足 5 个时验证本次全部输出日期，不向前补历史日期。本次区间没有输出时跳过该次验证；没有新增计算、仅重试验证时仍检查已有输出的尾部至多 5 日。随后刷新全部声明列的评估。失败标记保存为 `.tmp/factor_update/<factor>/refresh_failed.json`；下次重试。只有更新成功才保存新的 `readme_result.json`，保存报告与写回 README 分离。文档失败保留报告，可用 `--task readme` 重试。
 
 readme 任务调用 Evaluate 的文档操作，写回评估结果，再将运行报告写入第 7 节；不会重新跑计算。正式增量记录覆盖本次区间、耗时、进程树 RSS、资源和行数，保留原有 Benchmark 表。零输出记录为 0 行。详见[生产增量更新](references/production-update.md)。
 

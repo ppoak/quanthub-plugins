@@ -34,7 +34,7 @@ Calculate 子进程负责暂存、输出列、日期边界、唯一键、有限�
 
 ## 验证与评估
 
-Calculate 成功后，Validate 复算最近 5 个有输出日期，保存 audit/config，不修改 README 第 6 节。验证成功后 Evaluate 刷新全部声明列，执行 evaluate、check、plot；readme 任务单独调用评估文档写回，update 本身不修改 README。
+Calculate 成功后，Validate 仅复算本次更新区间内最新至多 5 个有输出日期；更新不足 5 日时只验证本次输出，不补入更早历史日期。更新区间没有输出时跳过该次验证；没有新增计算、仅重试验证时仍采用已有输出尾部至多 5 日。验证保存 audit/config，不修改 README 第 6 节。验证成功后 Evaluate 刷新全部声明列，执行 evaluate、check、plot；readme 任务单独调用评估文档写回，update 本身不修改 README。
 
 没有新增日期时也检查验证状态并刷新评估。后续阶段失败保存 `.tmp/factor_update/<factor>/refresh_failed.json`，命令非零退出，下次运行重试；此前已经提交的数据不回滚。
 
