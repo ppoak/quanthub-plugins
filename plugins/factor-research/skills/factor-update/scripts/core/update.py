@@ -59,14 +59,17 @@ def refresh_outputs(cfg: UpdateConfig, plan: UpdatePlan) -> tuple[list[str], boo
         return ["calculation completed with no eligible rows; validation/evaluation await factor data"], False
     messages: list[str] = []
     failed = False
-    if plan.refresh_validation:
+    validation_dates = [day for day in dates if plan.begin <= day <= plan.end] if plan.calculate else dates
+    if plan.refresh_validation and validation_dates:
         try:
-            path = refresh_validation(factor_name=cfg.factor_name, begin=dates[-5] if len(dates) >= 5 else dates[0],
-                                      end=dates[-1], cfg=cfg, project_root=root)
+            path = refresh_validation(factor_name=cfg.factor_name, begin=validation_dates[-5] if len(validation_dates) >= 5 else validation_dates[0],
+                                      end=validation_dates[-1], cfg=cfg, project_root=root)
             messages.append(f"validation={path}")
         except Exception as exc:
             failed = True
             messages.append(f"validation_failed={type(exc).__name__}: {exc}")
+    elif plan.refresh_validation:
+        messages.append("validation=skipped_no_updated_output")
     if cfg.refresh_evaluation and not failed:
         try:
             refresh_evaluation(cfg, end=plan.end)
