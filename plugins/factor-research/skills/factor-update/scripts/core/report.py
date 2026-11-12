@@ -1,8 +1,9 @@
+
+
 """Write the latest measured incremental update into factor README section 7."""
 
 from __future__ import annotations
 
-import argparse
 import json
 import os
 import re
@@ -59,7 +60,7 @@ def render_update_record(result: Mapping[str, Any]) -> str:
     )
 
 
-def update_factor_readme(readme_path: Path, result: Mapping[str, Any]) -> bool:
+def _render_factor_readme(readme_path: Path, result: Mapping[str, Any]) -> str:
     if not readme_path.is_file():
         raise FileNotFoundError(f"factor README not found: {readme_path.as_posix()}")
     original = readme_path.read_text(encoding="utf-8")
@@ -76,14 +77,19 @@ def update_factor_readme(readme_path: Path, result: Mapping[str, Any]) -> bool:
                 if not line.startswith("正式增量运行记录（")]
         section[left + 1:right] = [*body, "", record]
         updated = "\n".join([*lines[:start], *section, *lines[end:]]) + "\n"
-        if updated == original:
-            return False
-        _write_atomic(readme_path, updated)
-        return True
+        return updated
     raise ValueError("factor README requires the performance results block")
 
 
-def update_readme_after_run(
+def update_factor_readme(readme_path: Path, result: Mapping[str, Any]) -> bool:
+    updated = _render_factor_readme(readme_path, result)
+    if updated == readme_path.read_text(encoding="utf-8"):
+        return False
+    _write_atomic(readme_path, updated)
+    return True
+
+
+def save_update_report(
     *,
     project_root: Path,
     data_root: str | Path,
@@ -101,7 +107,7 @@ def update_readme_after_run(
     after_end: str | None,
     source_begin: str | None,
     message: str,
-) -> tuple[Path, bool] | None:
+) -> Path | None:
     root = Path(project_root).resolve()
     if status == "updated":
         if not begin or not after_end:
@@ -142,15 +148,7 @@ def update_readme_after_run(
 
     if report is None:
         return None
-    readme_path = (
-        resolve_factor_zoo_root(
-            project_root=root,
-            factor_zoo_root=factor_zoo_root,
-        )
-        / factor_name
-        / "README.md"
-    )
-    return readme_path, update_factor_readme(readme_path, report)
+    return _readme_result_path(root, factor_name)
 
 
 def update_readme_from_saved_result(
@@ -210,6 +208,7 @@ def count_output_rows(
     )
     storage = FactorStorage(
         "update_readme_count",
+        project_root=project_root,
         data_root=root,
         threads=1,
         memory_limit="256MB",
@@ -286,36 +285,16 @@ def _write_atomic(path: Path, content: str) -> None:
         temporary.unlink(missing_ok=True)
 
 
-def main() -> int:
-    parser = argparse.ArgumentParser(
-        description="Rewrite factor README section 7 from the latest saved update result."
-    )
-    parser.add_argument("--project-root", default=".")
-    parser.add_argument("--factor-name", required=True)
-    parser.add_argument("--factor-zoo-root")
-    args = parser.parse_args()
 
-    try:
-        result = update_readme_from_saved_result(
-            project_root=Path(args.project_root),
-            factor_zoo_root=args.factor_zoo_root,
-            factor_name=args.factor_name,
-        )
-        if result is None:
-            raise FileNotFoundError(
-                f"saved update result not found for {args.factor_name}"
-            )
-        readme_path, changed = result
-        action = "updated" if changed else "already current"
-        print(f"Factor README {action}: {readme_path.as_posix()}", flush=True)
-        return 0
-    except Exception as exc:  # noqa: BLE001 - expose writeback failures to the CLI.
-        print(
-            f"README writeback failed: {type(exc).__name__}: {exc}",
-            flush=True,
-        )
-        return 1
+def preview_readme(*, project_root: Path, factor_zoo_root: str | Path, factor_name: str) -> Path:
+    report = load_saved_report(project_root, factor_name)
+    path = Path(factor_zoo_root) / factor_name / "README.md"
+    _render_factor_readme(path, report)
+    return path
 
 
-if __name__ == "__main__":
-    raise SystemExit(main())
+def load_saved_report(project_root: Path, factor_name: str) -> dict[str, Any]:
+    report = _load_saved_readme_result(project_root, factor_name)
+    if report is None:
+        raise FileNotFoundError(f"saved update result not found for {factor_name}")
+    return report

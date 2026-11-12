@@ -1,41 +1,70 @@
 ---
 name: factor-update
-description: 按项目现有数据增量更新 active 因子，并刷新验证和评估结果。
+description: 补齐已有因子的最新数据，刷新验证、评估和总览图，并按需更新 README。
 ---
 
 # Factor Update
 
-运行前按 [Factor Protocol 安装说明](../factor-protocol/SKILL.md#安装)检查项目已有环境和依赖。`<path-to-skill>` 指本 Skill 的安装目录。
+运行前检查[项目环境](../factor-protocol/SKILL.md#安装)和[评估依赖](../factor-evaluate/SKILL.md)。首次计算、补算历史或重建数据，使用 Factor Calculate。
 
-本技能以因子包为最小更新单位，增量计算 `.env` 所配置注册表文件的 `active` 项中各包的全部声明列。定义变化、历史源分区改写或 schema 不安全时返回 `rebuild_required`，并交由 `factor-calculate` 显式重建。
+## 使用
 
-更新会刷新评估结果，运行前同时检查 [Factor Evaluate 的依赖](../factor-evaluate/SKILL.md)。
+从项目根目录运行。`<path-to-skill>` 替换为本技能的安装目录。
 
-入口与实现脚本平铺在 `scripts/` 下；运行时使用插件内的 Factor Protocol 和项目环境。
+`--target` 可以填写因子包名，也可以填写项目 schema 中的组名，例如 active、core。同名时优先按组处理；每个包的全部列一起更新。
 
-正式库的更新门禁、失败状态和可选调度配置见[生产增量更新说明](references/production-update.md)。
-
-从项目根目录运行：
+先预览更新计划，不修改数据和文档：
 
 ```sh
-uv run --locked python "<path-to-skill>/scripts/run_update.py" --project-root . --all --threads 1 --memory-limit 1GB --validation-memory-limit 1GB --temp-directory .tmp/factor_update
-uv run --locked python "<path-to-skill>/scripts/run_update.py" --project-root . --factor-name <factor_name> --dry-run
+.venv/Scripts/python "<path-to-skill>/scripts/run_update.py" --target active --dry-run
 ```
 
-在其他目录运行时，`--project-root` 指定数据项目；相对数据、因子库、临时和输出路径均从该根目录解析，正式验证和评估产物位于 `$ARTIFACTS/factor_zoo/`，`ARTIFACTS` 从项目 `.env` 读取。更新流程通过子进程调用插件内的 Calculate、Validate、Evaluate 脚本，检查 active 包级指纹、完整输出列清单和文件身份，采用 DuckDB 资源限制、逐因子释放内存及失败非零退出。
-
-`--all` 与 `--factor-name` 都只更新 `FACTORZOO_SCHEMA` 指定文件中 `active` 项列出的因子；每个条目的 `columns` 必须与该包的 `FACTOR_COLUMNS` 完整一致。
-
-调度中的验证调用使用 `--no-readme-update`，刷新 audit/config；需要更新 README 第 6 节时，单独执行 factor-validate 的标准脚本并检查差异。
-
-项目调度器按需调用本 Skill。更新范围由实际数据分区和因子声明的日历确定；数据查看方法见[因子数据读取](../factor-protocol/references/data-access.md)，调度方式见[生产增量更新说明](references/production-update.md)。
-
-真实更新成功后，`run_update.py` 调用同级 `readme.py`，回写因子 README 第 7 节 `factor-benchmark:results` 统一性能块内的最新增量更新记录，包含测试日期、输出日期、源起始日、线程、内存上限、每批交易日数、端到端墙钟耗时、更新进程树峰值 RSS、输出行数、状态和备注。记录覆盖本次更新的全部日期，成功的零输出更新记录行数为 0。源起始日取因子计算日志中的 `source_begin`；因子未输出该字段时显示 `—`。墙钟耗时和 RSS 覆盖计算、验证与评估刷新。`--dry-run`、`up_to_date` 和阻断/失败结果不生成新的实测记录；README 写回失败时命令返回非零，并保留最新测量。可单独重试 README 写回，不必重新运行更新：
+更新数据、验证、评估和总览图，保存运行记录：
 
 ```sh
-uv run --locked python "<path-to-skill>/scripts/readme.py" --project-root . --factor-name <factor_name>
+.venv/Scripts/python "<path-to-skill>/scripts/run_update.py" --target active
 ```
 
-该脚本只读取 `.tmp/factor_update/<factor_name>/readme_result.json` 并替换对应标记区域；没有成功更新记录时会明确失败。`--no-readme-update` 同时禁用 Update 第 7 节和内部 Evaluate 刷新对 README 的修改。Update 记录说明本次增量更新的资源消耗；Factor Benchmark 用于比较固定区间内的不同批次规模。Update 仅替换统一性能块内的正式增量运行记录，保留批次与单日增量基准。
+需要同时更新 README 时：
 
-启动检查使用 `uv run --locked python "<path-to-skill>/scripts/run_update.py" --help` 和 `uv run --locked python "<path-to-skill>/scripts/readme.py" --help`。
+```sh
+.venv/Scripts/python "<path-to-skill>/scripts/run_update.py" --target market_cap --task update --task readme
+```
+
+只用已有结果更新 README，不重新计算：
+
+```sh
+.venv/Scripts/python "<path-to-skill>/scripts/run_update.py" --target market_cap --task readme
+```
+
+## 参数
+
+| 参数 | 用途 |
+| --- | --- |
+| `--target` | 必填，指定因子包或组名 |
+| `--task` | 默认 update；可重复填写 update、readme，固定先更新再写文档 |
+| `--dry-run` | 只预览，可用于任意任务组合 |
+| `--project-root` | 项目目录，默认当前目录 |
+| `--threads` | 选择 Benchmark 已通过的线程数 |
+| `--memory-limit` | 选择 Benchmark 已通过的内存限制 |
+| `--compute-batch-days` | 选择 Benchmark 已通过的每批交易日数 |
+| `--temp-directory` | 临时文件目录，默认由脚本安排 |
+
+通常不需要指定资源参数。脚本从各因子 README 的 Benchmark 表中选择最快的成功配置；手动指定时也必须匹配已通过的组合。记录缺失、不完整或格式无法识别时，先完成 Factor Benchmark，不自行猜测配置。计算、验证和评估使用所选线程与内存，后续阶段若资源不足，先处理失败再重试。
+
+数据、因子包、schema 和结果目录读取项目 `.env`，完整用法见 `--help`。
+
+## 更新规则
+
+脚本从已有因子最后一个输出日之后，按源数据的可用交易日期补算；验证本次新增输出中最新至多 5 日，不足 5 日就验证全部新增日期，然后刷新评估和总览图。没有新增计算时，仍会检查已有验证和评估，必要时重试；重试验证使用已有输出的最新至多 5 日。
+
+默认不改 README，只有选择 readme 任务才写入评估结果和运行记录。`--dry-run` 下只预览，不执行写操作。
+
+## 失败处理
+
+- Benchmark 记录不完整：先运行 Factor Benchmark。
+- 因子定义、输出列或已有历史数据发生变化：按报错要求使用 Factor Calculate 重建，再继续更新。
+- 计算、验证或评估失败：查看报错，修复原因后重试，不跳过失败步骤。已提交的数据不会因后续失败自动撤销。
+- 仅文档写回失败：使用 `--task readme` 重试，无需重新更新数据。
+
+检查所有目标的执行结果，全部成功后才算本次更新完成。
