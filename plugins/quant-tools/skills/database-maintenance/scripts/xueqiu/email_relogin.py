@@ -7,7 +7,7 @@ import imaplib
 import os
 import re
 import smtplib
-import tempfile
+import hashlib
 import time
 import uuid
 import base64
@@ -236,6 +236,37 @@ def log_progress(stage: str, **details: object) -> None:
     print(f"{timestamp} stage={stage} {fields}".rstrip(), flush=True)
 
 
+class AccountIdentityMismatch(RuntimeError):
+    """The authenticated account does not match the requested phone."""
+
+
+def session_token(context, phone: str, *, timeout_ms: int) -> tuple[str, list[dict]] | None:
+    """Return a token only when the current session belongs to the target phone."""
+    cookies = context.cookies(["https://xueqiu.com"])
+    token = next((item["value"] for item in cookies if item["name"] == "xq_a_token"), "")
+    if not token:
+        return None
+    identity = context.request.get("https://xueqiu.com/account/bind/show.json", timeout=timeout_ms)
+    if identity.status in {401, 403}:
+        return None
+    if not identity.ok:
+        raise RuntimeError("Xueqiu account identity request failed")
+    account = identity.json()
+    if account.get("error_code"):
+        return None
+    telephone = str(account.get("telephone") or "").strip()
+    if not telephone:
+        return None
+    pattern = re.escape(telephone).replace(r"\*", r"\d")
+    if sum(char.isdigit() for char in telephone) < 4 or not re.fullmatch(pattern, phone):
+        raise AccountIdentityMismatch("Xueqiu account phone does not match the login target")
+    cookies = context.cookies(["https://xueqiu.com"])
+    token = next((item["value"] for item in cookies if item["name"] == "xq_a_token"), "")
+    if not token:
+        return None
+    return token, cookies
+
+
 def verified_login_token(context, response, phone: str, *, timeout_ms: int) -> tuple[str, list[dict]]:
     """Verify this login response and the authenticated phone before reading a token."""
     if not response.ok:
@@ -243,19 +274,10 @@ def verified_login_token(context, response, phone: str, *, timeout_ms: int) -> t
     data = response.json()
     if data.get("error_code") or data.get("phone_bound_third_party") or not data.get("user", {}).get("id"):
         raise RuntimeError("Xueqiu login was not completed")
-    identity = context.request.get("https://xueqiu.com/account/bind/show.json", timeout=timeout_ms)
-    if not identity.ok:
-        raise RuntimeError("Xueqiu account identity request failed")
-    account = identity.json()
-    telephone = str(account.get("telephone") or "").strip()
-    pattern = re.escape(telephone).replace(r"\*", r"\d")
-    if account.get("error_code") or sum(char.isdigit() for char in telephone) < 4 or not re.fullmatch(pattern, phone):
-        raise RuntimeError("Xueqiu account phone does not match the login target")
-    cookies = context.cookies(["https://xueqiu.com"])
-    token = next((item["value"] for item in cookies if item["name"] == "xq_a_token"), "")
-    if not token:
-        raise RuntimeError("Xueqiu login did not return an access token")
-    return token, cookies
+    verified = session_token(context, phone, timeout_ms=timeout_ms)
+    if verified is None:
+        raise RuntimeError("Xueqiu login did not establish an authenticated session")
+    return verified
 
 
 def playwright_relogin(
@@ -275,29 +297,32 @@ def playwright_relogin(
         raise ValueError("Login timeout must be positive")
     proxy = os.environ.get("XUEQIU_PROXY")
     profile_root = Path(profile_dir) if profile_dir is not None else Path(env_path).resolve().parent / DEFAULT_PROFILE_DIR
-    profile_root.mkdir(parents=True, exist_ok=True)
+    account_key = hashlib.sha256(phone.encode("utf-8")).hexdigest()
+    account_profile = profile_root / f"account-{account_key}"
+    account_profile.mkdir(parents=True, exist_ok=True)
     attempt = 0
     deadline = time.monotonic() + total_timeout_seconds
     with sync_playwright() as playwright:
         while time.monotonic() < deadline:
             attempt += 1
-            log_progress("sending_email", attempt=attempt)
-            request_id, message_id = send_code_request(phone, recipient=recipient)
-            log_progress("email_sent", request_id=request_id, sms_delay_seconds=30)
-            time.sleep(min(30, max(0, deadline - time.monotonic())))
-            remaining = max(1, int(deadline - time.monotonic()))
-            log_progress("launching_browser")
-            with tempfile.TemporaryDirectory(prefix=f"account-{token_index}-", dir=profile_root) as session_dir:
-                context = playwright.chromium.launch_persistent_context(
-                    session_dir,
-                    executable_path="C:/Program Files/Google/Chrome/Application/chrome.exe",
-                    headless=False,
-                    proxy={"server": proxy} if proxy else None,
+            log_progress("launching_browser", attempt=attempt)
+            context = playwright.chromium.launch_persistent_context(
+                str(account_profile),
+                executable_path="C:/Program Files/Google/Chrome/Application/chrome.exe",
+                headless=False,
+                proxy={"server": proxy} if proxy else None,
+            )
+            stage = "verifying_session"
+            log_progress(stage)
+            try:
+                verified = session_token(
+                    context, phone,
+                    timeout_ms=min(30_000, max(1, int((deadline - time.monotonic()) * 1_000))),
                 )
-                stage = "opening_login_page"
-                log_progress(stage)
-                try:
+                if verified is None:
                     page = context.pages[0] if context.pages else context.new_page()
+                    stage = "opening_login_page"
+                    log_progress(stage)
                     page.goto("https://www.xueqiu.com/account/login", wait_until="domcontentloaded", timeout=30_000)
                     page.wait_for_timeout(1_500)
                     stage = "filling_phone_and_agreement"
@@ -307,6 +332,14 @@ def playwright_relogin(
                     agreement.locator("i").click()
                     if "nochecked" in (agreement.locator("i").get_attribute("class") or ""):
                         raise RuntimeError("Xueqiu agreement checkbox was not checked")
+                    stage = "sending_email"
+                    log_progress(stage)
+                    request_id, message_id = send_code_request(phone, recipient=recipient)
+                    log_progress("email_sent", request_id=request_id, sms_delay_seconds=30)
+                    time.sleep(min(30, max(0, deadline - time.monotonic())))
+                    remaining = int(deadline - time.monotonic())
+                    if remaining <= 0:
+                        break
                     stage = "requesting_sms"
                     log_progress(stage)
                     page.get_by_text("发送验证码", exact=True).filter(visible=True).first.click()
@@ -330,22 +363,27 @@ def playwright_relogin(
                         page.locator(".modal__login__btn:visible").first.click()
                     stage = "verifying_identity"
                     log_progress(stage)
-                    token, cookies = verified_login_token(
+                    verified = verified_login_token(
                         context, login_response.value, phone,
                         timeout_ms=min(30_000, max(1, int((deadline - time.monotonic()) * 1_000))),
                     )
-                    stage = "saving_token"
-                    log_progress(stage)
-                    replace_token_in_env(token, token_index=token_index, env_path=env_path)
-                    save_login_status(token_index=token_index, phone=phone, cookies=cookies, status="valid")
-                    log_progress("completed", result="SUCCESS", token_saved=True)
-                    print("xueqiu_relogin_success=1", flush=True)
-                    return True
-                except Exception as exc:
-                    log_progress("attempt_failed", failed_stage=stage, error_type=type(exc).__name__)
-
-                finally:
-                    context.close()
+                else:
+                    log_progress("session_reused")
+                token, cookies = verified
+                stage = "saving_token"
+                log_progress(stage)
+                replace_token_in_env(token, token_index=token_index, env_path=env_path)
+                save_login_status(token_index=token_index, phone=phone, cookies=cookies, status="valid")
+                log_progress("completed", result="SUCCESS", token_saved=True)
+                print("xueqiu_relogin_success=1", flush=True)
+                return True
+            except AccountIdentityMismatch:
+                log_progress("failed", reason="account_identity_mismatch")
+                break
+            except Exception as exc:
+                log_progress("attempt_failed", failed_stage=stage, error_type=type(exc).__name__)
+            finally:
+                context.close()
             if time.monotonic() < deadline:
                 log_progress("retrying", remaining_seconds=max(0, int(deadline - time.monotonic())))
     save_login_status(token_index=token_index, phone=phone, cookies=[], status="relogin_required")
@@ -381,7 +419,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--token-index", type=int, help="Token position in XUEQIU_TOKENS (zero-based)")
     parser.add_argument("--recipient", help="Email address used for the verification-code reply")
     parser.add_argument("--env-path", default=".env", help="Project dotenv path")
-    parser.add_argument("--profile-dir", help="Root directory for isolated temporary login profiles")
+    parser.add_argument("--profile-dir", help="Root directory for persistent per-account login profiles")
     parser.add_argument("--timeout", type=int, default=600, help="Maximum login wait in seconds")
     parser.add_argument("--threshold-days", type=int, default=5, help="Expiry threshold for --check-expiring")
     return parser.parse_args(argv)
