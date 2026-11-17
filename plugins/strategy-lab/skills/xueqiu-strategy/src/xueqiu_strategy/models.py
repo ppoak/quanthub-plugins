@@ -144,6 +144,15 @@ class XueqiuPosition:
         return self.quantity
 
     @property
+    def last_price(self) -> float:
+        """Canonical alias for the latest position mark price."""
+        return self.price
+
+    @last_price.setter
+    def last_price(self, price: float) -> None:
+        self.update_price(price)
+
+    @property
     def book_value(self) -> float:
         return self.quantity * self.cost_price
 
