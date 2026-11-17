@@ -1,0 +1,12 @@
+[project]
+name = "xueqiu-strategy"
+version = "0.1.0"
+description = "Xueqiu local matching and remote portfolio record synchronization."
+requires-python = ">=3.12"
+dependencies = ["base-strategy>=0.1.0", "pandas>=2.2.0"]
+[build-system]
+requires = ["setuptools>=69"]
+build-backend = "setuptools.build_meta"
+[tool.setuptools.packages.find]
+where = ["src"]
+include = ["xueqiu_strategy*"]
