@@ -98,6 +98,12 @@ uv run --locked python "<path-to-skill>/scripts/scheduler.py" --run-once xueqiu_
 
 `email_relogin.py --check-expiring` 会读取 `.tmp/database-maintenance/xueqiu-auth/login_status.json`，对 ID token 在阈值内到期的账号启动邮件辅助重登录；阈值默认五天。统一调度器通过 `xueqiu_relogin` 任务调用同一入口，外部 scheduler 也可以直接调用 `scheduled_relogin()`。采集脚本输出任务级运行记录；统一调度器在任务结束后发送成功或失败通知，并将当前任务日志附在邮件正文中。客户端在检测到认证错误时发送 token 失效提醒。
 
+重登录时，每个账号的每次尝试使用独立、空白的临时浏览器 profile，结束后清理。默认根目录为 `.env` 所在目录下的 `.tmp/database-maintenance/xueqiu-auth/browser`；`--profile-dir` 指定临时 profile 的根目录，已有的共享浏览器登录状态不会加载。
+
+提交验证码后，脚本等待本次 `/snowman/login` 请求完成并确认响应包含登录用户，再通过同一会话的 `/account/bind/show.json` 核对绑定手机号。接口返回完整手机号或掩码手机号时，均须与目标号码匹配，之后才读取 `xq_a_token` 并写回 `XUEQIU_TOKENS` 的对应位置。登录失败、身份无法核实或超时，均保留原 token，并在重试耗尽后将状态标记为 `relogin_required`。
+
+手动登录默认按 `XUEQIU_LOGIN_PHONES` 中的位置选择 token；显式提供的 `--token-index` 须与已配置手机号的位置一致。手动入口与 `--check-expiring` 均使用 `--env-path` 指定的凭据文件。
+
 ## 故障处理
 
 - HTTP 405 按可能的 WAF 限制排查；先降低并发、增加请求间隔，再确认 token 和 Clash 节点状态。
