@@ -1,0 +1,4 @@
+interface:
+  display_name: "Xueqiu Strategy"
+  short_description: "构建基于四层框架的雪球策略，支持本地撮合与远端成交记账"
+  default_prompt: "使用 $xueqiu-strategy 构建雪球模拟投资组合策略，并验证本地撮合和账本结果。"
