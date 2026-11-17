@@ -86,10 +86,12 @@ def render_benchmark_table(report: dict[str, Any]) -> str:
     test_date = report.get("test_date", "YYYY-MM-DD")
     output_interval = f"{window.get('begin', '—')}..{window.get('end', '—')}"
     for row in report.get("runs", []):
+        row_window = row.get("output_window", window)
+        row_interval = f"{row_window.get('begin', '—')}..{row_window.get('end', '—')}"
         values = (
             test_date,
-            output_interval,
-            window.get("trading_days"),
+            row_interval,
+            row_window.get("trading_days"),
             row.get("compute_batch_days"),
             row.get("internal_batch_count"),
             configuration.get("threads"),
@@ -251,7 +253,17 @@ def build_output_window(
     trading_dates: tuple[str, ...] | list[str],
     requested_end: date,
     output_months: int = DEFAULT_OUTPUT_MONTHS,
+    output_batches: int | None = None,
+    compute_batch_days: int | None = None,
 ) -> BenchmarkWindow:
+    if output_batches is not None:
+        if output_batches <= 0 or not compute_batch_days or compute_batch_days <= 0:
+            raise ValueError("output-batches and compute-batch-days must be positive")
+        dates = sorted(date.fromisoformat(value) for value in trading_dates
+                       if date.fromisoformat(value) <= requested_end)
+        if len(dates) < output_batches * compute_batch_days:
+            raise ValueError("source calendar does not cover the requested output batches")
+        return BenchmarkWindow(tuple(value.isoformat() for value in dates[-output_batches * compute_batch_days:]))
     if output_months <= 0:
         raise ValueError("output_months must be positive")
     dates = sorted(
@@ -699,6 +711,7 @@ def _base_result(
     return {
         "compute_batch_days": compute_batch_days,
         "internal_batch_count": internal_batch_count(window, compute_batch_days),
+        "output_window": {"begin": window.begin, "end": window.end, "trading_days": window.trading_days},
     }
 
 
@@ -916,6 +929,8 @@ def make_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--output-months", type=positive_int, default=DEFAULT_OUTPUT_MONTHS
     )
+    parser.add_argument("--output-batches", type=positive_int,
+                        help="Fixed number of calculation batches per candidate; overrides output-months.")
     parser.add_argument(
         "--compute-batch-days",
         nargs="+",
@@ -1001,25 +1016,14 @@ def run_benchmark(args: argparse.Namespace) -> tuple[dict[str, Any], str]:
     require_compute_batch_support(factor_module, args.factor_name)
 
     trading_dates = load_trading_dates(data_root, args.end, factor_module)
-    window = build_output_window(
-        trading_dates,
-        args.end,
-        output_months=args.output_months,
-    )
-    print(f"Benchmark | {args.factor_name} | {window.begin} -> {window.end} | "
-          f"threads={args.threads}, memory={args.memory_limit or 'default'} | "
-          f"batch_days={args.compute_batch_days}", flush=True)
+    window = build_output_window(trading_dates, args.end, output_months=args.output_months)
     report: dict[str, Any] = {
         "test_date": datetime.now().astimezone().date().isoformat(),
         "configuration": {
             "threads": args.threads,
             "memory_limit": args.memory_limit or "DuckDB default",
         },
-        "output_window": {
-            "trading_days": window.trading_days,
-            "begin": window.begin,
-            "end": window.end,
-        },
+        "output_window": {"trading_days": window.trading_days, "begin": window.begin, "end": window.end},
         "all_columns": set(args.factor_columns or resolve_factor_columns(factor_module)) == set(resolve_factor_columns(factor_module)),
         "runs": [],
     }
@@ -1027,16 +1031,20 @@ def run_benchmark(args: argparse.Namespace) -> tuple[dict[str, Any], str]:
     with tempfile.TemporaryDirectory(prefix="factor-benchmark-") as temporary_root:
         temp_root = Path(temporary_root)
         for index, compute_batch_days in enumerate(args.compute_batch_days, start=1):
+            candidate_window = build_output_window(
+                trading_dates, args.end, output_months=args.output_months,
+                output_batches=args.output_batches, compute_batch_days=compute_batch_days,
+            ) if args.output_batches else window
             print(
                 f"[{index}/{len(args.compute_batch_days)}] "
                 f"{compute_batch_days} trading days per batch "
-                f"({internal_batch_count(window, compute_batch_days)} batches)",
+                f"({internal_batch_count(candidate_window, compute_batch_days)} batches)",
                 flush=True,
             )
             storage_factor_name = f"benchmark_{args.factor_name}_batch_{compute_batch_days}"
             result = run_calculation_case(
                 args,
-                window=window,
+                window=candidate_window,
                 compute_batch_days=compute_batch_days,
                 storage_factor_name=storage_factor_name,
                 temp_root=temp_root,

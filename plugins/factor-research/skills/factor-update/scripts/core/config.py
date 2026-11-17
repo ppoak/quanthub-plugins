@@ -205,14 +205,20 @@ def read_benchmark_resources(readme: Path) -> tuple[BenchmarkResources, ...]:
         if not candidates or len(daily) != 1:
             raise ValueError("candidate or single-day append results are missing")
         first = candidates[0][0]
-        same_fields = ("测试日期", "输出日期 / 区间", "输出交易日数", "线程", "内存限制")
+        # Candidates may deliberately use different output windows (for
+        # example, a fixed number of batches).  Comparison settings that
+        # must remain common are the test date and resource limits only.
+        same_fields = ("测试日期", "线程", "内存限制")
         if any(tuple(r[k] for k in same_fields) != tuple(first[k] for k in same_fields)
                for r, *_ in candidates):
             raise ValueError("Benchmark candidates use inconsistent comparison settings")
         day = daily[0]
-        if (day["测试日期"], day["输出日期 / 区间"], day["线程"], day["内存限制"]) != (
-                first["测试日期"], first["输出日期 / 区间"].split("..")[1], first["线程"], first["内存限制"]):
+        candidate_ends = {row["输出日期 / 区间"].split("..", 1)[1] for row, *_ in candidates}
+        if (day["测试日期"], day["线程"], day["内存限制"]) != (
+                first["测试日期"], first["线程"], first["内存限制"]):
             raise ValueError("single-day append does not match the candidate run")
+        if day["输出日期 / 区间"] not in candidate_ends:
+            raise ValueError("single-day append date does not match candidate windows")
         passed = tuple(
             BenchmarkResources(threads, memory, batch, _number(row["日均耗时（秒）"]), peak)
             for row, threads, memory, batch, peak in candidates if row["状态"] == "pass"
