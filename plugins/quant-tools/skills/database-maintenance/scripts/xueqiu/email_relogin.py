@@ -390,7 +390,7 @@ def playwright_relogin(
     with sync_playwright() as playwright:
         context = playwright.chromium.launch_persistent_context(
             str(account_profile),
-            executable_path="C:/Program Files/Google/Chrome/Application/chrome.exe",
+            channel="chrome",
             headless=False,
             proxy={"server": proxy} if proxy else None,
         )

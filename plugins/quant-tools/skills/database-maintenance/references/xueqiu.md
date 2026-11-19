@@ -104,6 +104,12 @@ uv run --locked python "<path-to-skill>/scripts/scheduler.py" --run-once xueqiu_
 
 手动登录默认按 `XUEQIU_LOGIN_PHONES` 中的位置选择 token；显式提供的 `--token-index` 须与已配置手机号的位置一致。手动入口与 `--check-expiring` 均使用 `--env-path` 指定的凭据文件。
 
+Mac 和 Windows 均通过 Playwright 的 `chrome` 通道启动本机已安装的 Google Chrome，无须指定浏览器路径。手动运行：
+
+```sh
+uv run --locked python "<path-to-skill>/scripts/xueqiu/email_relogin.py" "<完整手机号>" --env-path .env --timeout 600
+```
+
 ## 故障处理
 
 - HTTP 405 按可能的 WAF 限制排查；先降低并发、增加请求间隔，再确认 token 和 Clash 节点状态。
