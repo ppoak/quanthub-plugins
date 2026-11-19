@@ -89,26 +89,81 @@ uv run --locked python "<path-to-skill>/scripts/xueqiu/fetch_xueqiu_cube_rebalan
 
 状态任务遇到已有日期分区时，通过 `--replace-existing` 显式执行有意重跑。统一调度器按日期调度任务，并保留脚本默认的分区保护行为。
 
-## 统一调度
+## 雪球重登录
 
-```sh
-uv run --locked python "<path-to-skill>/scripts/scheduler.py" --list-jobs
-uv run --locked python "<path-to-skill>/scripts/scheduler.py" --run-once xueqiu_relogin --date <YYYY-MM-DD> --dry-run
+### 它做什么
+
+雪球 token 就像一把临时的钥匙。钥匙过期后，程序不能再访问雪球。
+
+重登录会打开 Chrome，把二维码发到邮箱，等用户扫码，然后把新的 token 写回 `.env`。登录只使用二维码和邮件，不使用短信。
+
+二维码过期后不会自己发送新码。请回复对应的登录邮件，正文单独写 `刷新`，程序才会发送新二维码。每次登录最多等十分钟，十分钟没有完成就结束本次登录。
+
+### 需要哪些文件
+
+| 文件 | 做什么 |
+| --- | --- |
+| `scripts/xueqiu/email_relogin.py` | 登录一个账号，发送二维码并保存 token。 |
+| `scripts/scheduler.py` | 按时间启动重登录。 |
+| `.env` | 保存邮箱、手机号和 token。不要提交到 Git。 |
+| `.tmp/database-maintenance/xueqiu-auth/browser` | 保存每个账号的 Chrome 登录状态。不要提交到 Git。 |
+
+每个手机号都有自己的 profile。下次登录时，程序会先试着使用这个账号以前的登录状态。
+
+### 配置
+
+在项目根目录的 `.env` 中填写：
+
+```dotenv
+SENDER=<发送邮件的邮箱>
+EMAIL_PASSWORD=<邮箱授权码>
+SMTP_SERVER=smtp.qq.com
+
+XUEQIU_LOGIN_PHONES=<手机号1>,<手机号2>
+XUEQIU_LOGIN_EMAILS=<邮箱1>,<邮箱2>
+XUEQIU_TOKENS=<token1>,<token2>
+
+XUEQIU_RELOGIN_SCHEDULE_TIME=22:00
+XUEQIU_RELOGIN_SCHEDULE_DAYS=all
+XUEQIU_RELOGIN_THRESHOLD_DAYS=5
+XUEQIU_RELOGIN_TIMEOUT=600
 ```
 
-`email_relogin.py --check-expiring` 会读取 `.tmp/database-maintenance/xueqiu-auth/login_status.json`，对 ID token 在阈值内到期的账号启动会话核验，有效则复用，失效后发送邮件二维码并监听十分钟。二维码过期不会自动发送新码；只有收到对应邮件的单行“刷新”回复时才重新生成并发送。统一调度器通过 `xueqiu_relogin` 任务调用同一入口，外部 scheduler 也可以直接调用 `scheduled_relogin()`。采集脚本输出任务级运行记录；统一调度器在任务结束后发送成功或失败通知，并将当前任务日志附在邮件正文中。客户端在检测到认证错误时发送 token 失效提醒。
+相同位置的内容属于同一个账号：第一个手机号、第一封邮箱、第一枚 token 是一组。三行的数量必须一样。`EMAIL_PASSWORD` 填邮箱授权码，不是邮箱登录密码。
 
-每个账号使用独立的持久化浏览器 profile。默认根目录为 `.env` 所在目录下的 `.tmp/database-maintenance/xueqiu-auth/browser`；子目录名为 `account-<完整手机号的 SHA-256>`，不依赖手机号尾号或 token 下标，调整配置顺序不会改变该账号的目录。`--profile-dir` 指定 profile 根目录。浏览器关闭后保留目录，下次继续复用；旧共享 profile 不会自动导入任何账号。profile 包含登录凭据，应保存在 Git 忽略目录；同一个 profile 同时只能由一个浏览器实例使用。
+### 手动登录
 
-启动后先通过同一会话的 `/account/bind/show.json` 核对绑定手机号。已有会话有效且手机号匹配时，直接保存当前 token，不发送登录邮件。未登录或会话失效时发送二维码邮件；页面实际显示二维码失效时只记录状态，邮箱回复“刷新”才触发下一张二维码。监听窗口固定十分钟，超时标记为 `relogin_required`，不自动重试。绑定手机号核验通过后才写回 token；身份不匹配会立即停止该账号的流程，保留原 token 和 profile，供核查。
-
-手动登录默认按 `XUEQIU_LOGIN_PHONES` 中的位置选择 token；显式提供的 `--token-index` 须与已配置手机号的位置一致。手动入口与 `--check-expiring` 均使用 `--env-path` 指定的凭据文件。
-
-Mac 和 Windows 均通过 Playwright 的 `chrome` 通道启动本机已安装的 Google Chrome，无须指定浏览器路径。手动运行：
+在项目根目录运行：
 
 ```sh
 uv run --locked python "<path-to-skill>/scripts/xueqiu/email_relogin.py" "<完整手机号>" --env-path .env --timeout 600
 ```
+
+然后：
+
+1. 等待二维码邮件。
+2. 用雪球 App 扫码并确认。
+3. 如果二维码过期，回复原邮件，正文只写 `刷新`。
+4. 收到新邮件后再扫码。
+
+程序会检查登录后的手机号。手机号不对时，不会覆盖原来的 token。
+
+### 按时间自动登录
+
+查看任务：
+
+```sh
+uv run --locked python "<path-to-skill>/scripts/scheduler.py" --list-jobs
+```
+
+手动运行一次重登录：
+
+```sh
+uv run --locked python "<path-to-skill>/scripts/scheduler.py" --run-once xueqiu_relogin --date <YYYY-MM-DD>
+```
+
+调度时间由 `.env` 中的 `XUEQIU_RELOGIN_SCHEDULE_TIME` 和
+`XUEQIU_RELOGIN_SCHEDULE_DAYS` 决定。
 
 ## 故障处理
 
