@@ -258,11 +258,24 @@ class AccountIdentityMismatch(RuntimeError):
 
 def session_token(context, phone: str, *, timeout_ms: int) -> tuple[str, list[dict]] | None:
     """Return a token only when the current session belongs to the target phone."""
+    from playwright.sync_api import Error, TimeoutError
+
     cookies = context.cookies(["https://xueqiu.com"])
     token = next((item["value"] for item in cookies if item["name"] == "xq_a_token"), "")
     if not token:
         return None
-    identity = context.request.get("https://xueqiu.com/account/bind/show.json", timeout=timeout_ms)
+    try:
+        identity = context.request.get("https://xueqiu.com/account/bind/show.json", timeout=timeout_ms)
+    except Error as exc:
+        network_error = re.search(
+            r"\b(?:ECONNRESET|ECONNREFUSED|ETIMEDOUT|EAI_AGAIN|ENETUNREACH|EHOSTUNREACH)\b",
+            str(exc),
+        )
+        if not isinstance(exc, TimeoutError) and network_error is None:
+            raise
+        log_progress("identity_request_retry", error_type=type(exc).__name__,
+                     network_error=network_error.group() if network_error else "TIMEOUT")
+        return None
     if identity.status in {400, 401, 403}:
         return None
     if not identity.ok:
@@ -405,12 +418,18 @@ def playwright_relogin(
             deadline = qr_started_at + total_timeout_seconds
             log_progress("qr_email_sent", sequence=sequence, request_id=request_id)
 
+            next_identity_poll = 0.0
             while time.monotonic() < deadline:
                 page.wait_for_timeout(1_000)
-                verified = session_token(
-                    context, phone,
-                    timeout_ms=min(15_000, max(1, int((deadline - time.monotonic()) * 1_000))),
-                )
+                if time.monotonic() >= deadline:
+                    break
+                verified = None
+                if time.monotonic() >= next_identity_poll:
+                    verified = session_token(
+                        context, phone,
+                        timeout_ms=min(15_000, max(1, int((deadline - time.monotonic()) * 1_000))),
+                    )
+                    next_identity_poll = time.monotonic() + 5
                 if verified is not None:
                     token, cookies = verified
                     replace_token_in_env(token, token_index=token_index, env_path=env_path)
