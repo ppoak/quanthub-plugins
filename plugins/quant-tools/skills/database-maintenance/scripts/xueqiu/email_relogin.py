@@ -313,7 +313,9 @@ def _capture_qr(page, output_dir: Path, sequence: int) -> Path:
     canvas.wait_for(state="visible", timeout=20_000)
     page.wait_for_function(
         """() => {
-            const c = document.querySelector('[class*="index_qrcode__wrapper"] canvas');
+            const wrapper = document.querySelector('[class*="index_qrcode__wrapper"]');
+            if (!wrapper || /刷新二维码|失效/.test(wrapper.innerText)) return false;
+            const c = wrapper.querySelector('canvas');
             if (!c || !c.width || !c.height) return false;
             const p = c.getContext('2d').getImageData(0, 0, c.width, c.height).data;
             for (let i = 0; i < p.length; i += 4) {
@@ -349,12 +351,23 @@ def _qr_state(page) -> str:
 
 
 def _refresh_qr(page) -> None:
+    previous_image = _qr_wrapper(page).locator("canvas").first.evaluate("canvas => canvas.toDataURL()")
     refresh = page.get_by_text("点击刷新二维码", exact=True).filter(visible=True).first
     try:
         refresh.click(timeout=2_000)
     except Exception:
         page.reload(wait_until="domcontentloaded", timeout=30_000)
         page.get_by_text("二维码登录", exact=True).filter(visible=True).first.click(timeout=30_000)
+    page.wait_for_function(
+        """previous => {
+            const wrapper = document.querySelector('[class*="index_qrcode__wrapper"]');
+            if (!wrapper || /刷新二维码|失效/.test(wrapper.innerText)) return false;
+            const canvas = wrapper.querySelector('canvas');
+            return canvas && canvas.toDataURL() !== previous;
+        }""",
+        arg=previous_image,
+        timeout=20_000,
+    )
 
 
 def playwright_relogin(
