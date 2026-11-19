@@ -138,10 +138,13 @@ def poll_refresh_request(
     with imaplib.IMAP4_SSL(server, port, timeout=30) as mailbox:
         mailbox.login(username, password)
         mailbox.select("INBOX", readonly=True)
-        status, data = mailbox.search(None, "ALL")
-        if status != "OK":
-            raise RuntimeError("IMAP inbox search failed")
-        for sequence_id in reversed(data[0].split()):
+        candidates: set[bytes] = set()
+        for request_id in request_ids:
+            status, data = mailbox.search(None, "HEADER", "Subject", request_id)
+            if status != "OK":
+                raise RuntimeError("IMAP inbox search failed")
+            candidates.update(data[0].split())
+        for sequence_id in sorted(candidates, key=int, reverse=True):
             status, raw = mailbox.fetch(sequence_id, "(BODY.PEEK[])")
             if status != "OK":
                 raise RuntimeError("IMAP message fetch failed")
