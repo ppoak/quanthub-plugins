@@ -7,6 +7,7 @@ import imaplib
 import os
 import re
 import smtplib
+import hashlib
 import time
 import uuid
 import base64
@@ -15,10 +16,10 @@ from datetime import datetime, timezone
 from email import message_from_bytes
 from email.header import decode_header
 from email.message import EmailMessage
+from email.utils import make_msgid
 from pathlib import Path
 
 
-CODE_PATTERN = re.compile(r"(?<!\d)(\d{4,6})(?!\d)")
 AUTH_ROOT = Path(".tmp/database-maintenance/xueqiu-auth")
 DEFAULT_PROFILE_DIR = AUTH_ROOT / "browser"
 LOGIN_STATUS_PATH = AUTH_ROOT / "login_status.json"
@@ -62,23 +63,34 @@ def save_login_status(*, token_index: int, phone: str, cookies: list[dict], stat
     temporary.replace(LOGIN_STATUS_PATH)
 
 
-def send_code_request(phone: str = "", recipient: str | None = None) -> tuple[str, str]:
+def send_qr_email(
+    phone: str,
+    recipient: str,
+    qr_path: str | Path,
+    *,
+    sequence: int,
+) -> tuple[str, str]:
+    """Send one newly generated QR image and return its request identifiers."""
     sender = os.environ["SENDER"]
     password = os.environ["EMAIL_PASSWORD"]
     server = os.environ["SMTP_SERVER"]
     port = int(os.environ.get("SMTP_PORT", "465"))
-    recipient = recipient or os.environ["DATABASE_MAINTENANCE_EMAIL_TO"]
     message = EmailMessage()
     message["From"] = sender
     message["To"] = recipient
     request_id = uuid.uuid4().hex[:8].upper()
-    suffix = phone[-4:] if phone else "unknown"
-    message_id = f"<{request_id.lower()}@xueqiu-auth.local>"
-    message["Message-ID"] = message_id
-    message["Subject"] = f"Xueqiu login verification code | {suffix} | {request_id}"
+    suffix = phone[-4:]
+    message["Message-ID"] = make_msgid()
+    message["Subject"] = f"Xueqiu QR login | {suffix} | {request_id} | {sequence}"
     message.set_content(
-        "Reply to this email with only the latest Xueqiu verification code.\n"
+        "Please scan the attached Xueqiu login QR code with the Xueqiu App and confirm login.\n"
+        "If the QR code has expired or you need a new one, reply to this email with a single line: 刷新\n"
         f"Request ID: {request_id}\nPhone suffix: {suffix}\n"
+    )
+    qr_file = Path(qr_path)
+    message.add_attachment(
+        qr_file.read_bytes(), maintype="image", subtype="png",
+        filename=f"xueqiu-login-{suffix}-{sequence}.png",
     )
     use_ssl = os.environ.get("SMTP_USE_SSL", "1").lower() not in {"0", "false", "no"}
     if use_ssl:
@@ -90,66 +102,72 @@ def send_code_request(phone: str = "", recipient: str | None = None) -> tuple[st
             smtp.starttls()
             smtp.login(sender, password)
             smtp.send_message(message)
-    return request_id, message_id
+    return request_id, message["Message-ID"] or ""
 
 
-def wait_for_code(timeout_seconds: int = 600, *, request_id: str, message_id: str, reply_mailbox: str | None = None) -> str:
-    """Match the login request regardless of sender; retain reply_mailbox for callers."""
+def _message_text(message) -> str:
+    chunks: list[str] = []
+    for part in message.walk():
+        if part.get_content_type() not in {"text/plain", "text/html"}:
+            continue
+        if part.get_content_disposition() == "attachment":
+            continue
+        payload = part.get_payload(decode=True) or b""
+        body = payload.decode(part.get_content_charset() or "utf-8", errors="replace")
+        if part.get_content_type() == "text/html":
+            body = re.sub(r"<[^>]+>", "\n", body)
+        chunks.append(body)
+    return "\n".join(chunks)
+
+
+def _is_refresh_reply(body: str) -> bool:
+    """Accept an explicit refresh command, excluding quoted email instructions."""
+    return bool(re.search(r"(?m)^\s*(?:刷新|refresh|重新发送|重发二维码)\s*$", body, re.IGNORECASE))
+
+
+def poll_refresh_request(
+    *,
+    request_ids: set[str],
+    seen_message_ids: set[str],
+) -> str | None:
+    """Return the matching request id when a user replies with a refresh command."""
     username = os.environ.get("XUEQIU_IMAP_USERNAME", os.environ["SENDER"])
     password = os.environ.get("XUEQIU_IMAP_PASSWORD", os.environ["EMAIL_PASSWORD"])
     server = os.environ.get("XUEQIU_IMAP_SERVER", "imap.qq.com")
     port = int(os.environ.get("XUEQIU_IMAP_PORT", "993"))
-    deadline = time.monotonic() + timeout_seconds
-    poll = 0
-    while time.monotonic() < deadline:
-        poll += 1
-        log_progress("checking_inbox", poll=poll)
-        with imaplib.IMAP4_SSL(server, port, timeout=30) as mailbox:
-            mailbox.login(username, password)
-            mailbox.select("INBOX", readonly=True)
-            status, data = mailbox.search(None, "ALL")
+    with imaplib.IMAP4_SSL(server, port, timeout=30) as mailbox:
+        mailbox.login(username, password)
+        mailbox.select("INBOX", readonly=True)
+        candidates: set[bytes] = set()
+        for request_id in request_ids:
+            status, data = mailbox.search(None, "HEADER", "Subject", request_id)
             if status != "OK":
                 raise RuntimeError("IMAP inbox search failed")
-            candidates = data[0].split()
-            log_progress("inbox_checked", inbox_messages=len(candidates))
-            for sequence_id in reversed(candidates):
-                status, raw = mailbox.fetch(sequence_id, "(BODY.PEEK[])")
-                if status != "OK":
-                    raise RuntimeError("IMAP message fetch failed")
-                message = message_from_bytes(raw[0][1])
-                subject = "".join(
-                    part.decode(charset or "utf-8", errors="replace") if isinstance(part, bytes) else part
-                    for part, charset in decode_header(message.get("Subject", ""))
-                )
-                thread = f"{message.get('In-Reply-To', '')} {message.get('References', '')}"
-                request_matches = re.search(rf"(?<![A-Za-z0-9]){re.escape(request_id)}(?![A-Za-z0-9])", subject)
-                if not request_matches and message_id not in re.findall(r"<[^>]+>", thread):
-                    continue
-                log_progress("reply_matched", request_id=request_id)
-                for part in message.walk():
-                    if part.get_content_type() not in {"text/plain", "text/html"}:
-                        continue
-                    if part.get_content_disposition() == "attachment":
-                        continue
-                    payload = part.get_payload(decode=True) or b""
-                    body = payload.decode(part.get_content_charset() or "utf-8", errors="replace")
-                    if part.get_content_type() == "text/html":
-                        body = re.sub(r"<[^>]+>", "\n", body)
-                    # Only accept a code on its own line, never phone suffixes in quoted requests.
-                    match = re.search(r"(?m)^\s*(\d{4,6})\s*$", body)
-                    if match:
-                        log_progress("verification_code_received")
-                        return match.group(1)
-                log_progress("reply_ignored", reason="no_standalone_verification_code")
-        log_progress("waiting_for_next_poll", interval_seconds=15)
-        time.sleep(min(15, max(0, deadline - time.monotonic())))
-    raise TimeoutError("Timed out waiting for Xueqiu verification code email")
-
-
-def request_code_then_wait(timeout_seconds: int = 600, *, recipient: str | None = None) -> str:
-    request_id, message_id = send_code_request(recipient=recipient)
-    time.sleep(30)
-    return wait_for_code(timeout_seconds, request_id=request_id, message_id=message_id, reply_mailbox=recipient)
+            candidates.update(data[0].split())
+        for sequence_id in sorted(candidates, key=int, reverse=True):
+            status, raw = mailbox.fetch(sequence_id, "(BODY.PEEK[])")
+            if status != "OK":
+                raise RuntimeError("IMAP message fetch failed")
+            message = message_from_bytes(raw[0][1])
+            message_id = message.get("Message-ID", "")
+            if message_id and message_id in seen_message_ids:
+                continue
+            if message_id:
+                seen_message_ids.add(message_id)
+            subject = "".join(
+                part.decode(charset or "utf-8", errors="replace") if isinstance(part, bytes) else part
+                for part, charset in decode_header(message.get("Subject", ""))
+            )
+            thread = f"{message.get('In-Reply-To', '')} {message.get('References', '')}"
+            matched_id = next(
+                (request_id for request_id in request_ids
+                 if re.search(rf"(?<![A-Za-z0-9]){re.escape(request_id)}(?![A-Za-z0-9])", subject)
+                 or request_id in thread),
+                None,
+            )
+            if matched_id and _is_refresh_reply(_message_text(message)):
+                return matched_id
+    return None
 
 
 def configured_login_targets() -> list[tuple[int, str, str]]:
@@ -180,7 +198,10 @@ def expiring_login_targets(threshold_days: int = 5) -> list[tuple[int, str, str]
     return targets
 
 
-def scheduled_relogin(*, threshold_days: int = 5, total_timeout_seconds: int = 600) -> bool:
+def scheduled_relogin(
+    *, threshold_days: int = 5, total_timeout_seconds: int = 600,
+    env_path: str | Path = ".env", profile_dir: str | Path | None = None,
+) -> bool:
     targets = expiring_login_targets(threshold_days)
     if not targets:
         print("xueqiu_relogin_targets=0")
@@ -192,6 +213,8 @@ def scheduled_relogin(*, threshold_days: int = 5, total_timeout_seconds: int = 6
             phone,
             token_index=token_index,
             recipient=recipient,
+            env_path=env_path,
+            profile_dir=profile_dir,
             total_timeout_seconds=total_timeout_seconds,
         ):
             success = False
@@ -229,89 +252,244 @@ def log_progress(stage: str, **details: object) -> None:
     print(f"{timestamp} stage={stage} {fields}".rstrip(), flush=True)
 
 
+class AccountIdentityMismatch(RuntimeError):
+    """The authenticated account does not match the requested phone."""
+
+
+def session_token(context, phone: str, *, timeout_ms: int) -> tuple[str, list[dict]] | None:
+    """Return a token only when the current session belongs to the target phone."""
+    from playwright.sync_api import Error, TimeoutError
+
+    cookies = context.cookies(["https://xueqiu.com"])
+    token = next((item["value"] for item in cookies if item["name"] == "xq_a_token"), "")
+    if not token:
+        return None
+    try:
+        identity = context.request.get("https://xueqiu.com/account/bind/show.json", timeout=timeout_ms)
+    except Error as exc:
+        network_error = re.search(
+            r"\b(?:ECONNRESET|ECONNREFUSED|ETIMEDOUT|EAI_AGAIN|ENETUNREACH|EHOSTUNREACH)\b",
+            str(exc),
+        )
+        if not isinstance(exc, TimeoutError) and network_error is None:
+            raise
+        log_progress("identity_request_retry", error_type=type(exc).__name__,
+                     network_error=network_error.group() if network_error else "TIMEOUT")
+        return None
+    if identity.status in {400, 401, 403}:
+        return None
+    if not identity.ok:
+        raise RuntimeError("Xueqiu account identity request failed")
+    account = identity.json()
+    if account.get("error_code"):
+        return None
+    telephone = str(account.get("telephone") or "").strip()
+    if not telephone:
+        return None
+    pattern = re.escape(telephone).replace(r"\*", r"\d")
+    if sum(char.isdigit() for char in telephone) < 4 or not re.fullmatch(pattern, phone):
+        raise AccountIdentityMismatch("Xueqiu account phone does not match the login target")
+    cookies = context.cookies(["https://xueqiu.com"])
+    token = next((item["value"] for item in cookies if item["name"] == "xq_a_token"), "")
+    if not token:
+        return None
+    return token, cookies
+
+
+def _open_qr_login(page) -> None:
+    page.goto("https://xueqiu.com/", wait_until="domcontentloaded", timeout=30_000)
+    page.get_by_text("二维码登录", exact=True).filter(visible=True).first.click(timeout=30_000)
+
+
+def _qr_wrapper(page):
+    wrapper = page.locator('[class*="index_qrcode__wrapper"]').first
+    wrapper.wait_for(state="visible", timeout=20_000)
+    return wrapper
+
+
+def _capture_qr(page, output_dir: Path, sequence: int) -> Path:
+    wrapper = _qr_wrapper(page)
+    canvas = wrapper.locator("canvas").first
+    canvas.wait_for(state="visible", timeout=20_000)
+    page.wait_for_function(
+        """() => {
+            const wrapper = document.querySelector('[class*="index_qrcode__wrapper"]');
+            if (!wrapper || /刷新二维码|失效/.test(wrapper.innerText)) return false;
+            const c = wrapper.querySelector('canvas');
+            if (!c || !c.width || !c.height) return false;
+            const p = c.getContext('2d').getImageData(0, 0, c.width, c.height).data;
+            for (let i = 0; i < p.length; i += 4) {
+                if (p[i] < 80 && p[i + 3] > 0) return true;
+            }
+            return false;
+        }""",
+        timeout=20_000,
+    )
+    box = canvas.bounding_box()
+    if box is None:
+        raise RuntimeError("Xueqiu login QR code bounds are unavailable")
+    output_dir.mkdir(parents=True, exist_ok=True)
+    path = output_dir / f"qrcode-{sequence}.png"
+    page.screenshot(
+        path=str(path),
+        clip={
+            "x": max(0, box["x"] - 16),
+            "y": max(0, box["y"] - 16),
+            "width": box["width"] + 32,
+            "height": box["height"] + 32,
+        },
+    )
+    os.chmod(path, 0o600)
+    return path
+
+
+def _qr_state(page) -> str:
+    try:
+        return _qr_wrapper(page).inner_text(timeout=1_000).strip()
+    except Exception:
+        return ""
+
+
+def _refresh_qr(page) -> None:
+    previous_image = _qr_wrapper(page).locator("canvas").first.evaluate("canvas => canvas.toDataURL()")
+    refresh = page.get_by_text("点击刷新二维码", exact=True).filter(visible=True).first
+    try:
+        refresh.click(timeout=2_000)
+    except Exception:
+        page.reload(wait_until="domcontentloaded", timeout=30_000)
+        page.get_by_text("二维码登录", exact=True).filter(visible=True).first.click(timeout=30_000)
+    page.wait_for_function(
+        """previous => {
+            const wrapper = document.querySelector('[class*="index_qrcode__wrapper"]');
+            if (!wrapper || /刷新二维码|失效/.test(wrapper.innerText)) return false;
+            const canvas = wrapper.querySelector('canvas');
+            return canvas && canvas.toDataURL() !== previous;
+        }""",
+        arg=previous_image,
+        timeout=20_000,
+    )
+
+
 def playwright_relogin(
     phone: str,
     *,
     token_index: int = 0,
     recipient: str | None = None,
     env_path: str | Path = ".env",
-    profile_dir: str | Path = DEFAULT_PROFILE_DIR,
+    profile_dir: str | Path | None = None,
     total_timeout_seconds: int = 600,
 ) -> bool:
     from playwright.sync_api import sync_playwright
 
     log_progress("started", phone_suffix=phone[-4:], token_index=token_index,
-                 timeout_seconds=total_timeout_seconds)
+                 timeout_seconds=total_timeout_seconds, login_mode="qr_email")
     if total_timeout_seconds <= 0:
         raise ValueError("Login timeout must be positive")
+    if not recipient:
+        raise ValueError("QR login email recipient is required")
     proxy = os.environ.get("XUEQIU_PROXY")
-    attempt = 0
-    deadline = time.monotonic() + total_timeout_seconds
+    profile_root = Path(profile_dir) if profile_dir is not None else Path(env_path).resolve().parent / DEFAULT_PROFILE_DIR
+    account_key = hashlib.sha256(phone.encode("utf-8")).hexdigest()
+    account_profile = profile_root / f"account-{account_key}"
+    account_profile.mkdir(parents=True, exist_ok=True)
+    run_dir = AUTH_ROOT / "qr-email" / f"account-{account_key}"
+    run_dir.mkdir(parents=True, exist_ok=True)
+    sequence = 0
+    request_ids: set[str] = set()
+    seen_message_ids: set[str] = set()
+    next_mail_poll = 0.0
+    qr_expired = False
+
     with sync_playwright() as playwright:
-        while time.monotonic() < deadline:
-            attempt += 1
-            log_progress("sending_email", attempt=attempt)
-            request_id, message_id = send_code_request(phone, recipient=recipient)
-            log_progress("email_sent", request_id=request_id, sms_delay_seconds=30)
-            time.sleep(min(30, max(0, deadline - time.monotonic())))
-            remaining = max(1, int(deadline - time.monotonic()))
-            log_progress("launching_browser")
-            context = playwright.chromium.launch_persistent_context(
-                str(profile_dir),
-                executable_path="C:/Program Files/Google/Chrome/Application/chrome.exe",
-                headless=False,
-                proxy={"server": proxy} if proxy else None,
+        context = playwright.chromium.launch_persistent_context(
+            str(account_profile),
+            channel="chrome",
+            headless=False,
+            proxy={"server": proxy} if proxy else None,
+        )
+        try:
+            verified = session_token(
+                context, phone,
+                timeout_ms=30_000,
             )
-            stage = "opening_login_page"
-            log_progress(stage)
-            try:
-                page = context.pages[0] if context.pages else context.new_page()
-                page.goto("https://www.xueqiu.com/account/login", wait_until="domcontentloaded", timeout=30_000)
-                page.wait_for_timeout(1_500)
-                stage = "filling_phone_and_agreement"
-                log_progress(stage)
-                page.locator("input[name=telephone]").first.fill(phone)
-                agreement = page.locator("label.modal__login__automatic_new:visible").first
-                agreement.locator("i").click()
-                if "nochecked" in (agreement.locator("i").get_attribute("class") or ""):
-                    raise RuntimeError("Xueqiu agreement checkbox was not checked")
-                stage = "requesting_sms"
-                log_progress(stage)
-                page.get_by_text("发送验证码", exact=True).filter(visible=True).first.click()
-                stage = "waiting_for_email_reply"
-                log_progress(stage, remaining_seconds=remaining)
-                try:
-                    code = wait_for_code(remaining, request_id=request_id, message_id=message_id, reply_mailbox=recipient)
-                except TimeoutError:
-                    log_progress("failed", reason="email_reply_timeout")
+            if verified is not None:
+                token, cookies = verified
+                replace_token_in_env(token, token_index=token_index, env_path=env_path)
+                save_login_status(token_index=token_index, phone=phone, cookies=cookies, status="valid")
+                log_progress("completed", result="SUCCESS", session="reused", token_saved=True)
+                print("xueqiu_relogin_success=1", flush=True)
+                return True
+
+            page = context.pages[0] if context.pages else context.new_page()
+            _open_qr_login(page)
+            sequence = 1
+            qr_path = _capture_qr(page, run_dir, sequence)
+            request_id, _ = send_qr_email(phone, recipient, qr_path, sequence=sequence)
+            qr_path.unlink(missing_ok=True)
+            request_ids.add(request_id)
+            qr_started_at = time.monotonic()
+            deadline = qr_started_at + total_timeout_seconds
+            log_progress("qr_email_sent", sequence=sequence, request_id=request_id)
+
+            next_identity_poll = 0.0
+            while time.monotonic() < deadline:
+                page.wait_for_timeout(1_000)
+                if time.monotonic() >= deadline:
                     break
-                stage = "submitting_code"
-                log_progress(stage)
-                page.locator("input[placeholder=请输入验证码]:visible").first.fill(code)
-                page.locator(".modal__login__btn:visible").first.click()
-                page.wait_for_timeout(4_000)
-                cookies = context.cookies(["https://xueqiu.com"])
-                token = next((item["value"] for item in cookies if item["name"] == "xq_a_token"), "")
-                if token:
-                    stage = "saving_token"
-                    log_progress(stage)
+                verified = None
+                if time.monotonic() >= next_identity_poll:
+                    verified = session_token(
+                        context, phone,
+                        timeout_ms=min(15_000, max(1, int((deadline - time.monotonic()) * 1_000))),
+                    )
+                    next_identity_poll = time.monotonic() + 5
+                if verified is not None:
+                    token, cookies = verified
                     replace_token_in_env(token, token_index=token_index, env_path=env_path)
                     save_login_status(token_index=token_index, phone=phone, cookies=cookies, status="valid")
-                    log_progress("completed", result="SUCCESS", token_saved=True)
+                    log_progress("completed", result="SUCCESS", session="qr", token_saved=True)
                     print("xueqiu_relogin_success=1", flush=True)
                     return True
-                log_progress("attempt_failed", reason="token_not_returned")
-            except Exception as exc:
-                log_progress("attempt_failed", failed_stage=stage, error_type=type(exc).__name__)
 
-            finally:
-                context.close()
-            if time.monotonic() < deadline:
-                log_progress("retrying", remaining_seconds=max(0, int(deadline - time.monotonic())))
-    save_login_status(token_index=token_index, phone=phone, cookies=[], status="relogin_required")
-    log_progress("completed", result="FAILED", reason="login_not_completed_before_deadline")
-    print("xueqiu_relogin_success=0", flush=True)
-    return False
+                state = _qr_state(page)
+                if not qr_expired and ("刷新二维码" in state or "失效" in state):
+                    qr_expired = True
+                    log_progress("qr_expired", sequence=sequence,
+                                 qr_age_seconds=round(time.monotonic() - qr_started_at, 1))
+
+                if time.monotonic() >= next_mail_poll:
+                    next_mail_poll = time.monotonic() + 5
+                    refresh_id = poll_refresh_request(
+                        request_ids=request_ids,
+                        seen_message_ids=seen_message_ids,
+                    )
+                    if refresh_id is not None:
+                        _refresh_qr(page)
+                        sequence += 1
+                        qr_path = _capture_qr(page, run_dir, sequence)
+                        request_id, _ = send_qr_email(phone, recipient, qr_path, sequence=sequence)
+                        qr_path.unlink(missing_ok=True)
+                        request_ids.add(request_id)
+                        qr_started_at = time.monotonic()
+                        qr_expired = False
+                        log_progress("qr_refresh_email_sent", sequence=sequence, request_id=request_id)
+
+            save_login_status(token_index=token_index, phone=phone, cookies=[], status="relogin_required")
+            log_progress("completed", result="FAILED", reason="qr_login_timeout", timeout_seconds=total_timeout_seconds)
+            print("xueqiu_relogin_success=0", flush=True)
+            return False
+        except AccountIdentityMismatch:
+            save_login_status(token_index=token_index, phone=phone, cookies=[], status="relogin_required")
+            log_progress("completed", result="FAILED", reason="account_identity_mismatch")
+            print("xueqiu_relogin_success=0", flush=True)
+            return False
+        except Exception as exc:
+            save_login_status(token_index=token_index, phone=phone, cookies=[], status="relogin_required")
+            log_progress("completed", result="FAILED", reason="runtime_error", error_type=type(exc).__name__)
+            print("xueqiu_relogin_success=0", flush=True)
+            return False
+        finally:
+            context.close()
 
 
 def load_dotenv(path: str | Path) -> None:
@@ -341,7 +519,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--token-index", type=int, help="Token position in XUEQIU_TOKENS (zero-based)")
     parser.add_argument("--recipient", help="Email address used for the verification-code reply")
     parser.add_argument("--env-path", default=".env", help="Project dotenv path")
-    parser.add_argument("--profile-dir", help="Persistent Playwright browser profile directory")
+    parser.add_argument("--profile-dir", help="Root directory for persistent per-account login profiles")
     parser.add_argument("--timeout", type=int, default=600, help="Maximum login wait in seconds")
     parser.add_argument("--threshold-days", type=int, default=5, help="Expiry threshold for --check-expiring")
     return parser.parse_args(argv)
@@ -355,6 +533,8 @@ def resolve_login_target(args: argparse.Namespace) -> tuple[int, str | None]:
         raise ValueError(f"Phone appears more than once in XUEQIU_LOGIN_PHONES: {args.phone}")
     if args.token_index is not None:
         token_index = args.token_index
+        if matches and token_index != matches[0]:
+            raise ValueError("--token-index does not match the configured phone position")
     elif matches:
         token_index = matches[0]
     else:
@@ -378,17 +558,18 @@ def main(argv: list[str] | None = None) -> int:
         return 0 if scheduled_relogin(
             threshold_days=args.threshold_days,
             total_timeout_seconds=args.timeout,
+            env_path=args.env_path,
+            profile_dir=args.profile_dir,
         ) else 1
     if not args.phone:
         raise ValueError("phone is required unless --check-expiring is used")
     token_index, recipient = resolve_login_target(args)
-    profile_dir = args.profile_dir or str(Path(args.env_path).resolve().parent / DEFAULT_PROFILE_DIR)
     success = playwright_relogin(
         args.phone,
         token_index=token_index,
         recipient=recipient,
         env_path=args.env_path,
-        profile_dir=profile_dir,
+        profile_dir=args.profile_dir,
         total_timeout_seconds=args.timeout,
     )
     return 0 if success else 1
