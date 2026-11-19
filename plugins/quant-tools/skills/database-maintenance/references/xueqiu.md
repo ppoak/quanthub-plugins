@@ -95,7 +95,7 @@ uv run --locked python "<path-to-skill>/scripts/xueqiu/fetch_xueqiu_cube_rebalan
 
 重登录会打开 Chrome，把二维码发到邮箱，等用户扫码，然后把新的 token 写回 `.env`。
 
-二维码过期后不会自己发送新码。请回复对应的登录邮件，正文单独写 `刷新`，程序才会发送新二维码。每次登录最多等十分钟，十分钟没有完成就结束本次登录。
+二维码是否过期，以雪球页面为准。过期后不会自己发送新码；请回复对应的登录邮件，正文单独写 `刷新`，程序才会发送新二维码。从第一封二维码邮件发出后开始等十分钟，刷新不会重新计时；超时未完成就结束本次登录，保留原 token，等待下一次运行。
 
 ### 需要哪些文件
 
@@ -106,9 +106,11 @@ uv run --locked python "<path-to-skill>/scripts/xueqiu/fetch_xueqiu_cube_rebalan
 | `.env` | 保存邮箱、手机号和 token。不要提交到 Git。 |
 | `.tmp/database-maintenance/xueqiu-auth/browser` | 保存每个账号的 Chrome 登录状态。不要提交到 Git。 |
 
-每个手机号都有自己的 profile。下次登录时，程序会先试着使用这个账号以前的登录状态。
+每个手机号都有自己的登录状态目录（profile）。下次运行时，如果仍然登录着且手机号正确，就直接保存 token，不再发二维码邮件。
 
 ### 配置
+
+运行脚本的电脑需要先安装 Google Chrome，Mac 和 Windows 都可以。发件邮箱需要开启 SMTP 发信和 IMAP 收信服务，程序通过收信来读取“刷新”回复。
 
 在项目根目录的 `.env` 中填写：
 
@@ -129,6 +131,8 @@ XUEQIU_RELOGIN_TIMEOUT=600
 
 相同位置的内容属于同一个账号：第一个手机号、第一封邮箱、第一枚 token 是一组。三行的数量必须一样。`EMAIL_PASSWORD` 填邮箱授权码，不是邮箱登录密码。
 
+上面的示例使用 QQ 邮箱发信。其他邮箱还需设置 `XUEQIU_IMAP_SERVER` 为该邮箱的收信服务器；收信账号和授权码默认与发信相同。
+
 ### 手动登录
 
 在项目根目录运行：
@@ -140,13 +144,15 @@ uv run --locked python "<path-to-skill>/scripts/xueqiu/email_relogin.py" "<完�
 然后：
 
 1. 等待二维码邮件。
-2. 用雪球 App 扫码并确认。
+2. 用雪球 App 扫码并确认；同一部手机上可以先保存图片，再从相册识别。
 3. 如果二维码过期，回复原邮件，正文只写 `刷新`。
 4. 收到新邮件后再扫码。
 
 程序会检查登录后的手机号。手机号不对时，不会覆盖原来的 token。
 
 ### 按时间自动登录
+
+每个账号先按上面的命令手动登录一次，程序才会留下到期记录。定时任务只检查已有记录中即将到期或上次登录失败的账号；默认提前五天检查，仍然登录着就直接复用。
 
 查看任务：
 
@@ -161,7 +167,15 @@ uv run --locked python "<path-to-skill>/scripts/scheduler.py" --run-once xueqiu_
 ```
 
 调度时间由 `.env` 中的 `XUEQIU_RELOGIN_SCHEDULE_TIME` 和
-`XUEQIU_RELOGIN_SCHEDULE_DAYS` 决定。
+`XUEQIU_RELOGIN_SCHEDULE_DAYS` 决定；示例表示每天 22:00，按项目设置的时区运行。
+
+查看清单和运行一次都不会开启定时等待。要持续按时间运行，启动调度器并保持它运行：
+
+```sh
+uv run --locked python "<path-to-skill>/scripts/scheduler.py"
+```
+
+调度器会运行项目中已启用的任务；如果只需要雪球重登录，在 `.env` 中设置 `DATABASE_MAINTENANCE_ENABLED_JOBS=xueqiu_relogin`。
 
 ## 故障处理
 
