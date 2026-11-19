@@ -260,7 +260,7 @@ def session_token(context, phone: str, *, timeout_ms: int) -> tuple[str, list[di
     if not token:
         return None
     identity = context.request.get("https://xueqiu.com/account/bind/show.json", timeout=timeout_ms)
-    if identity.status in {401, 403}:
+    if identity.status in {400, 401, 403}:
         return None
     if not identity.ok:
         raise RuntimeError("Xueqiu account identity request failed")
