@@ -34,5 +34,3 @@
 ## 导出本次运行
 
 需要 Excel 时安装 `base-strategy[excel]`，再调用 `xueqiu_strategy.stores.to_excel(account, ledger, "output/xueqiu.xlsx")`。表格包含账户、持仓、订单和成交。示例也演示了如何用成交记录计算资产变化。
-
-原实现见 [QuantHub 提交 `1d0a477`](https://github.com/ppoak/quanthub/commit/1d0a477c5edd5b327c6bdbcaed680dbf99954d5e) 的 `quanthub/trader/xueqiu/`。
