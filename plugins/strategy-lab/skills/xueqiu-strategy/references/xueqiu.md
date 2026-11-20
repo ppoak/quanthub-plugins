@@ -1,77 +1,38 @@
-# 雪球接入参考
+# 雪球账本使用说明
 
-## 来源与行为
+## 找到要用的账本
 
-移植自 QuantHub 最后保留完整雪球后端的提交 [`1d0a477`](https://github.com/ppoak/quanthub/commit/1d0a477c5edd5b327c6bdbcaed680dbf99954d5e)，原路径为 `quanthub/trader/xueqiu/`。原实现属于统一的 `trader-strategy` Skill，本插件将其拆为独立包 `xueqiu_strategy` 和 Skill。
+按[配置示例](../assets/.env.example)填写项目的 `.env`。`XUEQIU_TOKEN` 填雪球登录凭据（浏览器中的 `xq_a_token`），`XUEQIU_GID` 填模拟记账账本的编号。
 
-接入的是 `tc.xueqiu.com/tc/snowx/MONI/` 模拟投资记账接口。订单在本地撮合，再按成交价格、日期和股数向雪球添加交易记录。这里的 `gid` 是投资记账账户标识；雪球 Cube 组合的数据采集仍属于 Quant Tools。
+用 `uv run --locked --env-file .env python` 启动 Python。从 `os.environ` 读取登录凭据，传给 `XueqiuClient(token=...)`。调用 `client.list_investment_groups()` 后，在 `result_data.trans_groups` 里按账本名称查找 `gid`。
 
-## 配置与远端同步
+## 读取雪球上的记录
 
-将 [配置示例](../assets/.env.example) 中需要的字段补充到用户项目 `.env`，保留已有配置。`XUEQIU_TOKEN` 为登录雪球后的 `xq_a_token` Cookie 值；`XUEQIU_GID` 为目标投资记账账户 ID。HTTP 使用 Python 标准库 `urllib`，默认超时 10 秒，不自动重试写入。
+下列方法都通过 `client` 查询指定账本。查询成功时，返回的 `result_code` 是 `60000`。表中字段都在 `result_data` 下面。
 
-可通过 `client.ensure_success(client.list_investment_groups(), "list groups")` 查询原始账户列表，再由用户选择目标 `gid`。创建、删除账户的方法是 `add_investment_group(name)`、`delete_investment_group(gid)`，只在明确要求时调用。
+| 想查什么 | 调用方法 | 数据的位置 |
+| --- | --- | --- |
+| 现金和持仓 | `portfolio_performance(gid)` | `performances` 中，`ALL` 行的 `cash` 是总现金，各市场行的 `list` 是持仓明细。 |
+| 成交记录 | `transaction_records(gid, row=50)` | `transactions` |
+| 入金和出金记录 | `bank_transfer_records(gid, row=50)` | `bank_transfers` |
 
-用户已明确要求远端写入且已确认目标账户后，可运行：
+当前版本的 `ledger.order_history()`、`execution_history()` 和 `transfer_history()` 可能在雪球有记录时仍返回空列表。查远端记录时，请用上表的 Client 方法。
 
-```sh
-uv run --locked --env-file .env python "<path-to-skill>/examples/example_strategy_loop.py" --sync-transactions
-```
+## 把成交写到雪球
 
-该示例会将示例成交写入所选雪球记账账户，运行前应将示例行情、信号和初始资金替换为用户策略。实际策略也可直接构建四层组件：
+确认要写入的账本后，在自己的脚本里把登录凭据传给 Client，把账本编号传给 Ledger 和 Exchange。创建 Exchange 时设为 `sync_transactions=True`。开始前按雪球上的实际现金和持仓设置本地账户，已有持仓可用 `account.replace(cash=..., positions=...)` 一起载入。
 
-```python
-import os
-from xueqiu_strategy import XueqiuAccount, XueqiuClient, XueqiuExchange, XueqiuLedger
+每笔成交先更新本地现金和持仓，再写到雪球。`exchange.transfer("2026-01-05", 500)` 表示入金 500 元，金额为负数表示出金。开启同步后，划转也会写到雪球。收到写入错误时，先查雪球的成交或资金记录，确认缺哪一笔再补记。
 
-client = XueqiuClient(token=os.environ["XUEQIU_TOKEN"])
-gid = os.environ["XUEQIU_GID"]
-account = XueqiuAccount(account_id=gid, init_cash=100_000)
-ledger = XueqiuLedger(client=client, gid=gid)
-exchange = XueqiuExchange(client, gid=gid, sync_transactions=True)
-exchange.register(account, ledger=ledger)
-client.connect(exchange, account_id=account.account_id)
-```
+## 下单和价格
 
-本地初始资金与持仓需与使用的策略起点一致；构建组件不会自动读取或覆盖本地账户。
+- 价格表每行对应一只证券，行名用 `000001.SZ` 这样的代码。`open` 是开盘价，`close` 是收盘价。限价单用 `high` 和 `low` 判断本时段内是否到过限价。提供的 `volume` 为零时，订单继续等待。
+- `buy()` 和 `sell()` 默认用下一个可成交时段的开盘价。指定 `exectype="LIMIT"` 和 `price=...` 可以设限价。股数填正整数，未完成的订单可以调用 `client.cancel(order)` 撤销。
+- 每笔成交后立刻更新现金和股数，下一笔订单用更新后的余额判断能否成交。余额或持有股数不足时，订单状态为 `MARGIN`。买入后可立即卖出，股数可以是任意正整数。
+- 本地手续费默认是零，可通过 `commission` 设置。同步到雪球时，可在成交入口传 `commission_rate` 和 `tax_rate`，让雪球按相同口径记账。
 
-## 撮合与结算
+## 导出本次运行
 
-- `client.buy(code, quantity)`、`sell()` 默认市价单；限价单设置 `exectype="LIMIT", price=...`。数量为正整数。`cancel(order_or_id)` 只撤销本地未完成订单。
-- `advance(bar, timestamp=...)` 使用开盘价撮合市价单；限价单在当根 bar 可触及时成交，并保留开盘价优于限价的价格改善。缺失证券或成交量为零时继续等待。
-- 按提交顺序逐笔更新余额和持仓。现金或持仓不足的订单进入 `MARGIN` 终态。此后端保留原实现的整数股数及即时可卖规则，不施加 A 股 100 股整手或 T+1 限制；需要这些规则时使用 A 股回测 Skill。
-- 在 `advance()` 之后根据当前信息提交新信号，避免把当前 bar 的收盘信息用于当根 bar 撮合。
-- 本地手续费默认零，可向构造器传入 `commission(order, price, quantity)`。远端记账的 `commission_rate`、`tax_rate` 通过 `advance()` 或手动成交接口传入，应与本地费用口径一致。
-- `record_execution(order, trade_time=..., price=..., commission=...)` 可显式成交一个本地挂单。每笔成交产生时立即结算并记账，后续订单使用更新后的现金和持仓。`sync()` 只返回最近一批订单。
+需要 Excel 时安装 `base-strategy[excel]`，再调用 `xueqiu_strategy.stores.to_excel(account, ledger, "output/xueqiu.xlsx")`。表格包含账户、持仓、订单和成交。示例也演示了如何用成交记录计算资产变化。
 
-## 资金与历史
-
-```python
-# Positive amounts deposit, negative amounts withdraw.
-exchange.transfer("2026-01-05", 500)
-exchange.transfer("2026-01-06", -200)
-
-orders = ledger.order_history(row=50)
-executions = ledger.execution_history(row=50)
-transfers = ledger.transfer_history(row=50)
-```
-
-启用远端同步时，`transfer()` 同时写入雪球模拟资金划转记录。历史接口默认只查询；`execution_history(record=True)` 可按远端成交标识去重入账，但不改变账户余额和持仓。本地成交和远端查询的标识来源不同，合并前应核对重复记录，避免将同一成交计入两次。
-
-`client.get_market_price(symbols)` 查询雪球行情；`to_xueqiu_symbol` 和 `from_xueqiu_symbol` 转换证券代码。远端历史成交统一转换为 `.SH/.SZ` 代码。
-
-## 同步失败
-
-本地成交或资金划转先完成结算和入账，再调用远端接口。远端返回失败会抛出 `XueqiuAPIError`，本地事实保留；批次中尚未处理的订单继续留在队列。收到的远端响应保存在成交的 `meta["xueqiu_response"]` 中。
-
-发生失败后暂停策略，先查询雪球历史并核对本地账本，再决定如何补记。不要重跑整批交易或自动重试写入；网络错误可能发生在服务端已经写入之后。关闭远端同步的模式仍可显式调用查询接口，`sync_transactions` 只控制撮合与划转的远端写入。
-
-## 导出
-
-```python
-from xueqiu_strategy.stores import to_excel
-
-to_excel(account, ledger, "output/xueqiu.xlsx")
-```
-
-需安装 `base-strategy[excel]`，输出包含 `Account`、`Position`、`Order`、`Execution` 工作表。通用订单、成交导出和评估直接复用 Base Strategy。
+原实现见 [QuantHub 提交 `1d0a477`](https://github.com/ppoak/quanthub/commit/1d0a477c5edd5b327c6bdbcaed680dbf99954d5e) 的 `quanthub/trader/xueqiu/`。
