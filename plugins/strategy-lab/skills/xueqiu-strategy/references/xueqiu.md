@@ -42,7 +42,7 @@ client.connect(exchange, account_id=account.account_id)
 - 按提交顺序逐笔更新余额和持仓。现金或持仓不足的订单进入 `MARGIN` 终态。此后端保留原实现的整数股数及即时可卖规则，不施加 A 股 100 股整手或 T+1 限制；需要这些规则时使用 A 股回测 Skill。
 - 在 `advance()` 之后根据当前信息提交新信号，避免把当前 bar 的收盘信息用于当根 bar 撮合。
 - 本地手续费默认零，可向构造器传入 `commission(order, price, quantity)`。远端记账的 `commission_rate`、`tax_rate` 通过 `advance()` 或手动成交接口传入，应与本地费用口径一致。
-- `record_execution(order, trade_time=..., price=..., commission=...)` 可显式成交一个本地挂单。成交立即更新账户并记账；`sync()` 可重复调用，不会重复扣款或记账。
+- `record_execution(order, trade_time=..., price=..., commission=...)` 可显式成交一个本地挂单。每笔成交产生时立即结算并记账，后续订单使用更新后的现金和持仓。`sync()` 只返回最近一批订单。
 
 ## 资金与历史
 

@@ -101,16 +101,14 @@ class XueqiuExchange(BaseExchange):
         return self.last_executions
 
     def sync(self, *, timestamp=None) -> list[Order]:
-        """Settle latest fills once; repeated calls do not change balances."""
-        account = self.account()
-        for execution in self._last_executions:
-            if not any(item.execution_id == execution.execution_id for item in self._ledger.executions):
-                account.apply_execution(execution)
-                self._ledger.record_execution(execution)
-        for order in self._last_orders:
-            if not order.is_alive(timestamp):
-                self.record_order(order)
+        """Return the latest orders after immediate settlement."""
+        self.account()
         return self.last_orders
+
+    def _settle_execution(self, execution: Execution) -> None:
+        self.account().apply_execution(execution)
+        self._ledger.record_execution(execution)
+        self._last_executions.append(execution)
 
     def transfer(self, trade_time, amount: float) -> Execution:
         """Record a cash transfer locally, then optionally publish it remotely."""
@@ -126,8 +124,8 @@ class XueqiuExchange(BaseExchange):
             code="CASH", quantity=abs(amount), price=1.0,
         )
         self._last_orders = []
-        self._last_executions = [execution]
-        self.sync()
+        self._last_executions = []
+        self._settle_execution(execution)
         if self.sync_transactions:
             result = self.client.bank_transfer(
                 gid=self.gid, transfer_type=1 if amount >= 0 else 2,
@@ -230,8 +228,9 @@ class XueqiuExchange(BaseExchange):
         order.attach(execution)
         self._remove_order(order)
         self._last_orders.append(order)
-        self._last_executions.append(execution)
-        self.sync()
+        self._settle_execution(execution)
+        if not order.is_alive():
+            self.record_order(order)
         if self.sync_transactions:
             self.sync_execution(order, execution, commission_rate=commission_rate, tax_rate=tax_rate)
         return execution
