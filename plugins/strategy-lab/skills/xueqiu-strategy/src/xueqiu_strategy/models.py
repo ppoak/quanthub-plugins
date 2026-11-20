@@ -168,14 +168,14 @@ class XueqiuPosition:
 
     @property
     def realized_pnl(self) -> float:
-        return self.realized_pnl_value
+        return float(round_cash(self.realized_pnl_value))
 
     def apply_execution(self, execution: XueqiuExecution) -> None:
         """Apply one locally executed fill to this position."""
         if execution.side == XueqiuExecution.BUY:
             new_quantity = self.quantity + execution.quantity
             if new_quantity > 0:
-                total_cost = self.cost_price * self.quantity + execution.price * execution.quantity
+                total_cost = self.book_value - execution.cashflow
                 self.cost_price = total_cost / new_quantity
             self.quantity = new_quantity
         elif execution.side == XueqiuExecution.SELL:
