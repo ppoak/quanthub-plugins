@@ -12,7 +12,7 @@ from .utils import from_xueqiu_symbol
 
 
 class XueqiuLedger(BaseLedger):
-    """Canonical terminal orders and locally completed executions."""
+    """Terminal orders and executions, with optional remote history import."""
 
     def __init__(self, *, ledger_id: str | None = None, client: Any | None = None, gid: str | None = None) -> None:
         super().__init__()
@@ -35,7 +35,8 @@ class XueqiuLedger(BaseLedger):
             client.transaction_records(self._require_gid(), row=row),
             "transaction records",
         )
-        records = result.get("result_data", {}).get("list", [])
+        data = result.get("result_data") or {}
+        records = data.get("transactions", data.get("list", []))
         return records if isinstance(records, list) else []
 
     def execution_history(self, *, row: int = 50, record: bool = False) -> list[XueqiuExecution]:
@@ -57,7 +58,8 @@ class XueqiuLedger(BaseLedger):
             client.bank_transfer_records(self._require_gid(), row=row),
             "bank transfer records",
         )
-        records = result.get("result_data", {}).get("list", [])
+        data = result.get("result_data") or {}
+        records = data.get("bank_transfers", data.get("list", []))
         return records if isinstance(records, list) else []
 
     def _transaction_to_execution(self, item: dict[str, Any]) -> XueqiuExecution | None:
@@ -68,11 +70,19 @@ class XueqiuLedger(BaseLedger):
             return None
         side_value = str(item.get("type") or item.get("side") or "").lower()
         side = XueqiuExecution.SELL if side_value in {"2", "sell", "s"} else XueqiuExecution.BUY
+        execution_id = item.get("tid") or item.get("id") or item.get("transaction_id")
+        if item.get("time") is not None:
+            timestamp = pd.to_datetime(item["time"], unit="ms", utc=True, errors="coerce")
+            timestamp = timestamp.tz_convert("Asia/Shanghai").tz_localize(None)
+        else:
+            timestamp = pd.to_datetime(item.get("date") or item.get("created_at"), errors="coerce")
+        if not execution_id or pd.isna(timestamp):
+            return None
         return XueqiuExecution(
-            execution_id=str(item.get("id") or item.get("transaction_id") or XueqiuExecution._auto_id("xueqiu-remote")),
+            execution_id=str(execution_id),
             account_id=self.account_id or "",
             order_id=str(item.get("order_id") or ""),
-            datetime=pd.to_datetime(item.get("date") or item.get("created_at") or pd.Timestamp.now()),
+            datetime=timestamp,
             side=side,
             code=symbol,
             quantity=quantity,

@@ -16,7 +16,7 @@
 | 成交记录 | `transaction_records(gid, row=50)` | `transactions` |
 | 入金和出金记录 | `bank_transfer_records(gid, row=50)` | `bank_transfers` |
 
-当前版本的 `ledger.order_history()`、`execution_history()` 和 `transfer_history()` 可能在雪球有记录时仍返回空列表。查远端记录时，请用上表的 Client 方法。
+`ledger.order_history()` 和 `ledger.transfer_history()` 读取远端原始成交和划转记录。`ledger.execution_history(record=True)` 将可转换的远端成交按成交编号去重写入 `ledger.executions`。远端成交时间使用北京时间。
 
 ## 把成交写到雪球
 
