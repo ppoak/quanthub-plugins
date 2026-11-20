@@ -102,7 +102,7 @@ def evaluate_executions(
             price_matrix[code] = np.nan
         if side == "BUY":
             shares.iloc[loc:, shares.columns.get_loc(code)] += quantity
-            cash_delta.iloc[loc:] -= quantity * price + comm
+            cash_delta.iloc[loc:] += getattr(execution, "cashflow", -(quantity * price + comm))
         elif side == "SELL":
             shares.iloc[loc:, shares.columns.get_loc(code)] -= quantity
             cash_delta.iloc[loc:] += quantity * price - comm

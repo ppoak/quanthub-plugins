@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 import math
+from decimal import Decimal
 
 from base_strategy.account import BaseAccount
 from .models import XueqiuExecution, XueqiuPosition
+from .utils import round_cash
 
 
 class XueqiuAccount(BaseAccount):
@@ -41,7 +43,10 @@ class XueqiuAccount(BaseAccount):
     def apply_execution(self, execution: XueqiuExecution) -> None:
         if execution.side in {XueqiuExecution.BUY, XueqiuExecution.SELL}:
             self.position(execution.code).apply_execution(execution)
-        self.cash += execution.cashflow
+        if execution.side == XueqiuExecution.BUY:
+            self.cash = float(round_cash(self.cash) + Decimal(str(execution.cashflow)))
+        else:
+            self.cash += execution.cashflow
 
     def update_prices(self, prices) -> None:
         """Mark existing positions from a code-to-price mapping."""

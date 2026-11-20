@@ -5,6 +5,8 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any, ClassVar
 
+from .utils import buy_amount, round_cash
+
 
 @dataclass
 class XueqiuExecution:
@@ -37,7 +39,7 @@ class XueqiuExecution:
     def cashflow(self) -> float:
         gross = self.quantity * self.price
         if self.side == self.BUY:
-            return -gross - self.comm
+            return -float(buy_amount(self.price, self.quantity, self.comm))
         if self.side == self.SELL:
             return gross - self.comm
         return -gross if self.side == self.WITHDRAW else gross

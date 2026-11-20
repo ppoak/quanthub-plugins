@@ -2,6 +2,18 @@
 
 from __future__ import annotations
 
+from decimal import Decimal, ROUND_HALF_UP
+
+
+def round_cash(amount: float | Decimal) -> Decimal:
+    """Round a cash amount to cents."""
+    return Decimal(str(amount)).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+
+
+def buy_amount(price: float, quantity: float, commission: float) -> Decimal:
+    """Return the total payable for a buy, rounded to cents."""
+    return round_cash(Decimal(str(price)) * Decimal(str(quantity)) + Decimal(str(commission)))
+
 
 def to_xueqiu_symbol(code: str) -> str:
     """Convert QuantHub/RiceQuant style codes to Xueqiu symbols."""

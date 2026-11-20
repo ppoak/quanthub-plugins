@@ -13,7 +13,7 @@ from .account import XueqiuAccount
 from .client import XueqiuClient
 from .ledger import XueqiuLedger
 from .models import XueqiuExecution as Execution, XueqiuOrder as Order
-from .utils import to_xueqiu_symbol
+from .utils import buy_amount, round_cash, to_xueqiu_symbol
 
 
 def _zero_commission(order, price, quantity) -> float:
@@ -157,7 +157,8 @@ class XueqiuExchange(BaseExchange):
             insufficient = (
                 order.side == Order.SELL and available_quantity(order.code, bar_dt) < order.remaining
             ) or (
-                order.side == Order.BUY and fill_px * order.remaining + fee > account.cash
+                order.side == Order.BUY
+                and buy_amount(fill_px, order.remaining, fee) > round_cash(account.cash)
             )
             if insufficient:
                 order.status = Order.MARGIN
@@ -217,7 +218,7 @@ class XueqiuExchange(BaseExchange):
             raise ValueError("Execution price or commission is invalid")
         if order.side == Order.SELL and order.remaining > account.available_quantity(order.code):
             raise ValueError("Sell quantity exceeds available position")
-        if order.side == Order.BUY and order.remaining * price + commission > account.cash:
+        if order.side == Order.BUY and buy_amount(price, order.remaining, commission) > round_cash(account.cash):
             raise ValueError("Buy amount exceeds available cash")
         execution = Execution(
             execution_id=Execution._auto_id("xueqiu-local"), order_id=order.order_id,
