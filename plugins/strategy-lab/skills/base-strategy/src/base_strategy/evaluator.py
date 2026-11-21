@@ -133,7 +133,7 @@ def evaluate_asset_value(
     *,
     benchmark: pd.Series | None = None,
 ) -> pd.Series:
-    """Compute performance, excluding optional per-bar external cash flows from returns."""
+    """Compute performance, treating optional external flows as available at each bar start."""
 
     metrics = _empty_metrics()
     if asset_value.empty or "nav" not in asset_value:
@@ -152,11 +152,12 @@ def evaluate_asset_value(
     performance_nav = nav
     growth = float(nav.iloc[-1]) / init_cash if init_cash > 0 else None
     if "external_flow" in asset_value:
-        flows = pd.to_numeric(asset_value["external_flow"], errors="coerce").reindex(nav.index).fillna(0)
+        cumulative = pd.to_numeric(asset_value["external_flow"], errors="coerce").fillna(0).cumsum()
+        observed = cumulative.reindex(nav.index)
+        flows = observed.diff().fillna(observed.iloc[0])
         if flows.ne(0).any():
-            previous_nav = nav.shift().iloc[1:]
-            returns = ((nav.iloc[1:] - flows.iloc[1:] - previous_nav)
-                       / previous_nav.where(previous_nav != 0)).fillna(0.0)
+            capital = nav.shift().iloc[1:] + flows.iloc[1:]
+            returns = ((nav.iloc[1:] - capital) / capital.where(capital > 0)).fillna(0.0)
             wealth = pd.concat([pd.Series([1.0], index=nav.index[:1]), (1.0 + returns).cumprod()])
             growth = float(wealth.iloc[-1])
             init_cash -= float(flows.iloc[0])
