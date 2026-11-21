@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import pandas as pd
 
 from .utils import shanghai_time
@@ -14,7 +16,9 @@ def to_excel(account, ledger, path: str) -> None:
 
     ``openpyxl`` is required. Install the ``excel`` extra of ``base-strategy``.
     """
-    with pd.ExcelWriter(path, engine="openpyxl") as writer:
+    destination = Path(path)
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    with pd.ExcelWriter(destination, engine="openpyxl") as writer:
         pd.DataFrame(
             [{"cash": account.cash, "market_value": account.market_value, "nav": account.net_asset_value}]
         ).to_excel(writer, sheet_name="Account", index=False)
