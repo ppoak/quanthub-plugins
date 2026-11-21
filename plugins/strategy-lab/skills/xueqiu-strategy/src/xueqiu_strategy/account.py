@@ -5,6 +5,8 @@ from __future__ import annotations
 import math
 from decimal import Decimal
 
+import pandas as pd
+
 from base_strategy.account import BaseAccount
 from .models import XueqiuExecution, XueqiuPosition
 from .utils import round_cash
@@ -25,7 +27,7 @@ class XueqiuAccount(BaseAccount):
 
     @property
     def market_value(self) -> float:
-        return sum(position.market_value for position in self.positions.values())
+        return sum(position.market_value for position in self.positions.values() if position.quantity)
 
     @property
     def net_asset_value(self) -> float:
@@ -48,8 +50,10 @@ class XueqiuAccount(BaseAccount):
     def update_prices(self, prices) -> None:
         """Mark existing positions from a code-to-price mapping."""
         for code, position in self.positions.items():
-            if position.quantity and code in prices and math.isfinite(float(prices[code])):
-                position.update_price(prices[code])
+            if position.quantity:
+                price = prices.get(code)
+                mark = float(price) if not pd.isna(price) else math.nan
+                position.update_price(mark if math.isfinite(mark) and mark > 0 else math.nan)
 
     def available_quantity(self, code: str, as_of=None) -> float:
         return self.positions.get(code, XueqiuPosition(code=code)).shares_held

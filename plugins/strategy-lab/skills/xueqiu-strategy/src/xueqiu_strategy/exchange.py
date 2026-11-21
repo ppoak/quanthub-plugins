@@ -178,26 +178,36 @@ class XueqiuExchange(BaseExchange):
                 order, trade_time=bar_dt, price=fill_px, commission=fee,
                 commission_rate=commission_rate, tax_rate=tax_rate,
             )
-        if "close" in bar.columns:
-            account.update_prices(bar["close"])
+        account.update_prices(bar["close"] if "close" in bar.columns else {})
         return self.last_orders, self.last_executions
 
     def match(self, order: Order, bar_row) -> float | None:
         """Use the opening price or a reachable limit with opening improvement."""
-        if float(bar_row.get("volume", 1.0)) <= 0:
+        volume = bar_row.get("volume", 1.0)
+        if pd.isna(volume) or not math.isfinite(float(volume)) or float(volume) <= 0:
             return None
-        open_px = float(bar_row.get("open", bar_row.get("close", 0.0)))
+        opening = bar_row.get("open", bar_row.get("close"))
+        if pd.isna(opening):
+            return None
+        open_px = float(opening)
         if not math.isfinite(open_px) or open_px <= 0:
             return None
         if order.execution_type == Order.MARKET:
             return open_px
-        high_px = float(bar_row.get("high", open_px))
-        low_px = float(bar_row.get("low", open_px))
         if order.execution_type == Order.LIMIT and order.limit_price is not None:
-            if order.side == Order.BUY and low_px <= order.limit_price:
-                return min(open_px, order.limit_price)
-            if order.side == Order.SELL and high_px >= order.limit_price:
-                return max(open_px, order.limit_price)
+            limit = order.limit_price
+            if order.side == Order.BUY:
+                low = bar_row.get("low")
+                if open_px <= limit:
+                    return open_px
+                if not pd.isna(low) and 0 < float(low) <= limit:
+                    return limit
+            elif order.side == Order.SELL:
+                high = bar_row.get("high")
+                if open_px >= limit:
+                    return open_px
+                if not pd.isna(high) and math.isfinite(float(high)) and float(high) >= limit:
+                    return limit
         return None
 
     def execute(
