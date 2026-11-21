@@ -49,7 +49,10 @@ class XueqiuExchange(BaseExchange):
         """Connect one local account and its canonical ledger."""
         if self._account is not None and self._account is not account:
             raise ValueError("XueqiuExchange is already connected to another account")
+        if ledger.gid is not None and ledger.gid != self.gid:
+            raise ValueError("Ledger and exchange must use the same gid")
         ledger.subscribe(account)
+        ledger.gid = self.gid
         self._account = account
         self._ledger = ledger
 
