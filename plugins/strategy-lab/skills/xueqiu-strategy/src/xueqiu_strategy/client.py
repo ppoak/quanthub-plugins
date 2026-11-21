@@ -163,7 +163,6 @@ class XueqiuClient(BaseClient):
             ),
             "Accept": "application/json, text/plain, */*",
             "Content-Type": "application/x-www-form-urlencoded; charset=UTF-8",
-            "Cookie": f"xq_a_token={token}",
         }
 
     def _url(self, path_or_url: str, params: Optional[dict[str, Any]] = None) -> str:
@@ -171,6 +170,11 @@ class XueqiuClient(BaseClient):
             url = path_or_url
         else:
             url = urllib.parse.urljoin(self.BASE_URL_TRADE, path_or_url)
+        parsed = urllib.parse.urlsplit(url)
+        host = parsed.hostname or ""
+        if (parsed.scheme != "https" or parsed.username is not None or parsed.port not in {None, 443}
+                or not (host == "xueqiu.com" or host.endswith(".xueqiu.com"))):
+            raise ValueError("Xueqiu requests require a trusted HTTPS endpoint")
         if params:
             query = urllib.parse.urlencode(params)
             sep = "&" if urllib.parse.urlparse(url).query else "?"
@@ -194,6 +198,7 @@ class XueqiuClient(BaseClient):
             headers=self.headers,
             method=method.upper(),
         )
+        request.add_unredirected_header("Cookie", f"xq_a_token={self.token}")
         try:
             with self.opener.open(request, timeout=self.timeout) as response:
                 body = response.read().decode("utf-8")
