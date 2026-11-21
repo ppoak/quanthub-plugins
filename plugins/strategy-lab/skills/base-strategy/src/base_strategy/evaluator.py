@@ -76,13 +76,16 @@ def evaluate_executions(
     codes = sorted(set(price_matrix.columns) | set(initial_positions or {}))
     shares = pd.DataFrame(0.0, index=index, columns=codes)
     cash_delta = pd.Series(0.0, index=index)
+    external_flow = pd.Series(0.0, index=index)
 
     for code, quantity in (initial_positions or {}).items():
         if code in shares:
             shares.loc[:, code] = float(quantity)
 
-    for execution in sorted(executions, key=lambda item: pd.Timestamp(_execution_timestamp(item))):
-        ts = pd.Timestamp(_execution_timestamp(execution))
+    timed = [(_align_timestamp(_execution_timestamp(item), index.tz), item) for item in executions]
+    for ts, execution in sorted(timed, key=lambda item: item[0]):
+        if pd.isna(ts):
+            continue
         loc = index.searchsorted(ts, side="right") - 1
         if loc < 0:
             continue
@@ -91,24 +94,26 @@ def evaluate_executions(
         quantity = float(_execution_quantity(execution) or 0.0)
         price = float(_execution_price(execution) or 0.0)
         comm = float(_execution_comm(execution) or 0.0)
-        if side in {"TRANSFER", "DEPOSIT"}:
-            cash_delta.iloc[loc:] += quantity * price
-            continue
-        if side in {"WITHDRAW", "WITHDRAWAL"}:
-            cash_delta.iloc[loc:] -= quantity * price
+        if side in {"TRANSFER", "DEPOSIT", "WITHDRAW", "WITHDRAWAL"}:
+            sign = -1 if side in {"WITHDRAW", "WITHDRAWAL"} else 1
+            cashflow = float(getattr(execution, "cashflow", sign * quantity * price))
+            cash_delta.iloc[loc:] += cashflow
+            external_flow.iloc[loc] += cashflow
             continue
         if code and code != "CASH" and code not in shares:
             shares[code] = 0.0
             price_matrix[code] = np.nan
         if side == "BUY":
             shares.iloc[loc:, shares.columns.get_loc(code)] += quantity
-            cash_delta.iloc[loc:] -= quantity * price + comm
+            cash_delta.iloc[loc:] += float(getattr(execution, "cashflow", -(quantity * price + comm)))
         elif side == "SELL":
             shares.iloc[loc:, shares.columns.get_loc(code)] -= quantity
-            cash_delta.iloc[loc:] += quantity * price - comm
+            cash_delta.iloc[loc:] += float(getattr(execution, "cashflow", quantity * price - comm))
 
-    aligned_prices = price_matrix.reindex(columns=shares.columns).ffill().fillna(0.0)
-    market_value = (shares * aligned_prices).sum(axis=1)
+    marks = price_matrix.reindex(columns=shares.columns).apply(pd.to_numeric, errors="coerce").astype(float)
+    marks = marks.where(np.isfinite(marks) & (marks > 0))
+    position_values = (shares * marks).where(shares.ne(0), 0.0)
+    market_value = position_values.sum(axis=1, skipna=False)
     cash = initial_cash + cash_delta
     frame = pd.DataFrame(
         {
@@ -116,6 +121,7 @@ def evaluate_executions(
             "book_value": np.nan,
             "market_value": market_value,
             "nav": cash + market_value,
+            "external_flow": external_flow,
         },
         index=index,
     )
@@ -127,29 +133,38 @@ def evaluate_asset_value(
     *,
     benchmark: pd.Series | None = None,
 ) -> pd.Series:
-    """Compute the metric set used by broker performance reports."""
+    """Compute performance, treating optional external flows as available at each bar start."""
 
     metrics = _empty_metrics()
-    if asset_value.empty or "nav" not in asset_value or len(asset_value) < 2:
-        if not asset_value.empty and "nav" in asset_value:
-            metrics["init_cash"] = _first_number(asset_value["nav"])
-            metrics["final_nav"] = _last_number(asset_value["nav"])
+    if asset_value.empty or "nav" not in asset_value:
         return pd.Series(metrics, name="metrics")
 
-    nav = pd.to_numeric(asset_value["nav"], errors="coerce").dropna()
+    actual_nav = pd.to_numeric(asset_value["nav"], errors="coerce").astype(float)
+    final_nav = float(actual_nav.iloc[-1])
+    nav = actual_nav.dropna()
     if len(nav) < 2:
+        metrics["init_cash"] = float(nav.iloc[0]) if not nav.empty else None
+        metrics["final_nav"] = final_nav
         return pd.Series(metrics, name="metrics")
 
     returns = nav.pct_change(fill_method=None).dropna()
     init_cash = float(nav.iloc[0])
-    final_nav = float(nav.iloc[-1])
-    total_return = (final_nav - init_cash) / init_cash if init_cash > 0 else None
+    performance_nav = nav
+    growth = float(nav.iloc[-1]) / init_cash if init_cash > 0 else None
+    if "external_flow" in asset_value:
+        cumulative = pd.to_numeric(asset_value["external_flow"], errors="coerce").fillna(0).cumsum()
+        observed = cumulative.reindex(nav.index)
+        flows = observed.diff().fillna(observed.iloc[0])
+        if flows.ne(0).any():
+            capital = nav.shift().iloc[1:] + flows.iloc[1:]
+            returns = ((nav.iloc[1:] - capital) / capital.where(capital > 0)).fillna(0.0)
+            wealth = pd.concat([pd.Series([1.0], index=nav.index[:1]), (1.0 + returns).cumprod()])
+            growth = float(wealth.iloc[-1])
+            init_cash -= float(flows.iloc[0])
+            performance_nav = wealth * (init_cash if init_cash > 0 else 1.0)
+    total_return = growth - 1.0 if growth is not None else None
     years = _years_elapsed(nav.index)
-    annualized_return = (
-        (final_nav / init_cash) ** (1.0 / years) - 1.0
-        if years and years > 0 and init_cash > 0 and final_nav > 0
-        else None
-    )
+    annualized_return = growth ** (1.0 / years) - 1.0 if years and growth is not None and growth > 0 else None
     periods_per_year = max(1.0, (len(nav) - 1) / years) if years and years > 0 else 252
     ann_factor = math.sqrt(periods_per_year)
     volatility_annual = float(returns.std(ddof=1) * ann_factor) if len(returns) > 1 else 0.0
@@ -158,8 +173,8 @@ def evaluate_asset_value(
     downside_std = float(downside.std(ddof=1) * ann_factor) if len(downside) > 1 else 0.0
     sortino_ratio = annualized_return / downside_std if annualized_return is not None and downside_std else None
 
-    running_max = nav.cummax()
-    drawdown = nav - running_max
+    running_max = performance_nav.cummax()
+    drawdown = performance_nav - running_max
     pct_drawdown = drawdown / running_max
     max_dd = float(drawdown.min())
     max_dd_pct = float(pct_drawdown.min())
@@ -170,8 +185,8 @@ def evaluate_asset_value(
     gross_loss = abs(float(returns[returns < 0].sum()))
     profit_factor = gross_profit / gross_loss if gross_loss else None
 
-    net_base = init_cash if init_cash > 0 else float(nav.abs().max())
-    net = nav / net_base if net_base else nav * 0.0
+    net_base = init_cash if init_cash > 0 else float(performance_nav.abs().max())
+    net = performance_nav / net_base if net_base else performance_nav * 0.0
     bm_returns = _benchmark_returns(benchmark, nav.index)
     excess_returns = returns.values - bm_returns.values[: len(returns)]
     tracking_error = float(np.std(excess_returns) * ann_factor) if len(excess_returns) else None
@@ -284,14 +299,13 @@ def _drawdown_period(drawdown: pd.Series, pct_drawdown: pd.Series) -> int | None
     return int(end_loc - start_loc)
 
 
-def _first_number(series: pd.Series) -> float | None:
-    values = pd.to_numeric(series, errors="coerce").dropna()
-    return float(values.iloc[0]) if not values.empty else None
-
-
-def _last_number(series: pd.Series) -> float | None:
-    values = pd.to_numeric(series, errors="coerce").dropna()
-    return float(values.iloc[-1]) if not values.empty else None
+def _align_timestamp(value: Any, timezone) -> pd.Timestamp:
+    timestamp = pd.Timestamp(value)
+    if timestamp.tzinfo is None:
+        return timestamp.tz_localize(timezone) if timezone is not None else timestamp
+    if timezone is None:
+        return timestamp.tz_localize(None)
+    return timestamp.tz_convert(timezone)
 
 
 def _execution_timestamp(execution: Any) -> Any:
