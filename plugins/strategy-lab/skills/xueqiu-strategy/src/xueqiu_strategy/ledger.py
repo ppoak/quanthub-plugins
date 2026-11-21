@@ -29,6 +29,19 @@ class XueqiuLedger(BaseLedger):
         self.account = account
         self.account_id = str(getattr(account, "account_id", "") or "")
 
+    def record_execution(self, execution: XueqiuExecution) -> XueqiuExecution:
+        """Store a confirmed fact once, even when it has a local and a remote ID."""
+        remote = execution.meta.get("xueqiu_remote") or {}
+        remote_id = execution.meta.get("xueqiu_tid")
+        comment = remote.get("comment")
+        for existing in self.executions:
+            if remote_id and existing.meta.get("xueqiu_tid") == remote_id:
+                return existing
+            if comment and existing.meta.get("xueqiu_comment") == comment:
+                existing.meta["xueqiu_tid"] = remote_id
+                return existing
+        return super().record_execution(execution)
+
     def order_history(
         self, *, row: int = 50, pos: int | str | None = None, all_pages: bool = False,
     ) -> list[dict[str, Any]]:
@@ -106,7 +119,7 @@ class XueqiuLedger(BaseLedger):
                 Decimal(str(item.get("commission") or item.get("comm") or 0))
                 + Decimal(str(item.get("tax") or 0))
             ),
-            meta={"xueqiu_remote": item},
+            meta={"xueqiu_remote": item, "xueqiu_tid": str(execution_id)},
         )
 
     def _require_client(self) -> Any:

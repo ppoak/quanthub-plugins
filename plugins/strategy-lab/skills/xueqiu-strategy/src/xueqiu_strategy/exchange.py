@@ -264,17 +264,25 @@ class XueqiuExchange(BaseExchange):
         previous = execution.meta.get("xueqiu_response")
         if previous is not None:
             return self.client.ensure_success(previous, "add transaction")
+        comment = str(order.meta.get("comment", ""))
+        execution.meta["xueqiu_comment"] = f"{comment} [ql:{execution.execution_id.split('#')[-1]}]".strip()
         result = self.client.add_transaction(
             gid=self.gid, symbol=to_xueqiu_symbol(execution.code),
             shares=int(execution.quantity),
             transaction_type=self.BUY_TRANSACTION if execution.side == Execution.BUY else self.SELL_TRANSACTION,
             date=str(shanghai_time(execution.datetime).date()), price=execution.price,
             tax_rate=tax_rate, commission_rate=commission_rate,
-            comment=str(order.meta.get("comment", "")),
+            comment=execution.meta["xueqiu_comment"],
         )
         execution.meta["xueqiu_response"] = result
         order.meta["xueqiu_response"] = result
-        return self.client.ensure_success(result, "add transaction")
+        confirmed = self.client.ensure_success(result, "add transaction")
+        data = confirmed.get("result_data") or {}
+        tid = data.get("tid") if isinstance(data, dict) else None
+        tid = tid or confirmed.get("tid")
+        if tid:
+            execution.meta["xueqiu_tid"] = str(tid)
+        return confirmed
 
     def _remove_order(self, order: Order) -> None:
         self._order_queue = deque(item for item in self._order_queue if item is not order)
