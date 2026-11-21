@@ -6,7 +6,7 @@ from dataclasses import dataclass, field
 from decimal import Decimal
 from typing import Any, ClassVar
 
-from .utils import round_cash, trade_amount
+from .utils import round_cash, shanghai_time, trade_amount
 
 
 @dataclass
@@ -34,7 +34,9 @@ class XueqiuExecution:
 
     @property
     def timestamp(self) -> Any:
-        return self.datetime
+        if self.datetime is None:
+            return None
+        return shanghai_time(self.datetime).tz_localize("Asia/Shanghai")
 
     @property
     def cashflow(self) -> float:

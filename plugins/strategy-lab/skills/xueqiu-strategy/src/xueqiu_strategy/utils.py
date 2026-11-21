@@ -5,6 +5,8 @@ from __future__ import annotations
 import math
 from decimal import Decimal, ROUND_HALF_UP
 
+import pandas as pd
+
 
 def round_cash(amount: float | Decimal) -> Decimal:
     """Round a cash amount to cents."""
@@ -46,3 +48,10 @@ def from_xueqiu_symbol(symbol: str) -> str:
     if value.startswith("SZ") and len(value) == 8:
         return f"{value[2:]}.SZ"
     return value
+
+
+
+def shanghai_time(value) -> pd.Timestamp:
+    """Represent a timestamp as local wall time in Shanghai."""
+    stamp = pd.Timestamp(value)
+    return stamp.tz_convert("Asia/Shanghai").tz_localize(None) if stamp.tzinfo else stamp

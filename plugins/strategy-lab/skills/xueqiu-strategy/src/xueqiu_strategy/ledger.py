@@ -8,7 +8,7 @@ import pandas as pd
 
 from base_strategy.ledger import BaseLedger
 from .models import XueqiuExecution
-from .utils import from_xueqiu_symbol
+from .utils import from_xueqiu_symbol, shanghai_time
 
 
 class XueqiuLedger(BaseLedger):
@@ -73,9 +73,9 @@ class XueqiuLedger(BaseLedger):
         execution_id = item.get("tid") or item.get("id") or item.get("transaction_id")
         if item.get("time") is not None:
             timestamp = pd.to_datetime(item["time"], unit="ms", utc=True, errors="coerce")
-            timestamp = timestamp.tz_convert("Asia/Shanghai").tz_localize(None)
+            timestamp = shanghai_time(timestamp)
         else:
-            timestamp = pd.to_datetime(item.get("date") or item.get("created_at"), errors="coerce")
+            timestamp = shanghai_time(pd.to_datetime(item.get("date") or item.get("created_at"), errors="coerce"))
         if not execution_id or pd.isna(timestamp):
             return None
         return XueqiuExecution(

@@ -81,8 +81,10 @@ def evaluate_executions(
         if code in shares:
             shares.loc[:, code] = float(quantity)
 
-    for execution in sorted(executions, key=lambda item: pd.Timestamp(_execution_timestamp(item))):
-        ts = pd.Timestamp(_execution_timestamp(execution))
+    timed = [(_align_timestamp(_execution_timestamp(item), index.tz), item) for item in executions]
+    for ts, execution in sorted(timed, key=lambda item: item[0]):
+        if pd.isna(ts):
+            continue
         loc = index.searchsorted(ts, side="right") - 1
         if loc < 0:
             continue
@@ -292,6 +294,15 @@ def _first_number(series: pd.Series) -> float | None:
 def _last_number(series: pd.Series) -> float | None:
     values = pd.to_numeric(series, errors="coerce").dropna()
     return float(values.iloc[-1]) if not values.empty else None
+
+
+def _align_timestamp(value: Any, timezone) -> pd.Timestamp:
+    timestamp = pd.Timestamp(value)
+    if timestamp.tzinfo is None:
+        return timestamp.tz_localize(timezone) if timezone is not None else timestamp
+    if timezone is None:
+        return timestamp.tz_localize(None)
+    return timestamp.tz_convert(timezone)
 
 
 def _execution_timestamp(execution: Any) -> Any:

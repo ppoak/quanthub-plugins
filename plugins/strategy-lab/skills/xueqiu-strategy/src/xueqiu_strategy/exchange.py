@@ -13,7 +13,7 @@ from .account import XueqiuAccount
 from .client import XueqiuClient
 from .ledger import XueqiuLedger
 from .models import XueqiuExecution as Execution, XueqiuOrder as Order
-from .utils import buy_amount, round_cash, to_xueqiu_symbol
+from .utils import buy_amount, round_cash, shanghai_time, to_xueqiu_symbol
 
 
 def _zero_commission(order, price, quantity) -> float:
@@ -119,7 +119,7 @@ class XueqiuExchange(BaseExchange):
         amount = float(round_cash(amount))
         if -amount > account.cash:
             raise ValueError("Transfer exceeds available cash")
-        trade_dt = pd.to_datetime(trade_time)
+        trade_dt = shanghai_time(trade_time)
         execution = Execution(
             execution_id=Execution._auto_id("xueqiu-transfer"),
             account_id=account.account_id, datetime=trade_dt,
@@ -146,7 +146,7 @@ class XueqiuExchange(BaseExchange):
         account = self.account()
         if not isinstance(bar, pd.DataFrame):
             raise TypeError("advance() requires a pd.DataFrame indexed by code")
-        bar_dt = pd.to_datetime(timestamp)
+        bar_dt = shanghai_time(timestamp)
         self._last_orders = []
         self._last_executions = []
         available_quantity = available_quantity or account.available_quantity
@@ -227,7 +227,7 @@ class XueqiuExchange(BaseExchange):
             raise ValueError("Buy amount exceeds available cash")
         execution = Execution(
             execution_id=Execution._auto_id("xueqiu-local"), order_id=order.order_id,
-            account_id=account.account_id, datetime=pd.to_datetime(trade_time),
+            account_id=account.account_id, datetime=shanghai_time(trade_time),
             side=order.side, code=order.code, quantity=order.remaining,
             price=price, comm=commission,
         )
@@ -255,7 +255,7 @@ class XueqiuExchange(BaseExchange):
             gid=self.gid, symbol=to_xueqiu_symbol(execution.code),
             shares=int(execution.quantity),
             transaction_type=self.BUY_TRANSACTION if execution.side == Execution.BUY else self.SELL_TRANSACTION,
-            date=str(pd.to_datetime(execution.datetime).date()), price=execution.price,
+            date=str(shanghai_time(execution.datetime).date()), price=execution.price,
             tax_rate=tax_rate, commission_rate=commission_rate,
             comment=str(order.meta.get("comment", "")),
         )

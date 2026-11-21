@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import pandas as pd
 
+from .utils import shanghai_time
+
 __all__ = ["to_excel"]
 
 
@@ -30,9 +32,11 @@ def to_excel(account, ledger, path: str) -> None:
                 for code, position in account.positions.items()
             ]
         ).to_excel(writer, sheet_name="Position", index=False)
-        pd.DataFrame([order.__dict__ for order in ledger.orders]).to_excel(
+        pd.DataFrame([dict(vars(order), created_at=shanghai_time(order.created_at),
+                           executed_at=shanghai_time(order.executed_at)) for order in ledger.orders]).to_excel(
             writer, sheet_name="Order", index=False
         )
-        pd.DataFrame([execution.__dict__ for execution in ledger.executions]).to_excel(
+        pd.DataFrame([dict(vars(execution), datetime=shanghai_time(execution.datetime))
+                      for execution in ledger.executions]).to_excel(
             writer, sheet_name="Execution", index=False
         )
