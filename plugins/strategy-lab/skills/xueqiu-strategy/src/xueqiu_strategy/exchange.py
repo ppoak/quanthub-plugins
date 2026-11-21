@@ -11,7 +11,7 @@ import pandas as pd
 
 from base_strategy.exchange import BaseExchange
 from .account import XueqiuAccount
-from .checkpoint import load_checkpoint, restore_execution, restore_order, restore_position, save_checkpoint
+from .checkpoint import Checkpoint, restore_execution, restore_order, restore_position
 from .client import XueqiuClient
 from .errors import XueqiuAPIError
 from .ledger import XueqiuLedger
@@ -47,7 +47,7 @@ class XueqiuExchange(BaseExchange):
         self._last_executions: list[Execution] = []
         self._account: XueqiuAccount | None = None
         self._ledger: XueqiuLedger | None = None
-        self._checkpoint = Path(checkpoint_path) if checkpoint_path is not None else None
+        self._checkpoint = Checkpoint(Path(checkpoint_path)) if checkpoint_path is not None else None
         self._pending_write: dict | None = None
         self._active_bar: pd.Timestamp | None = None
         self.last_completed_bar: pd.Timestamp | None = None
@@ -59,8 +59,8 @@ class XueqiuExchange(BaseExchange):
         if ledger.gid is not None and ledger.gid != self.gid:
             raise ValueError("Ledger and exchange must use the same gid")
         state = None
-        if self._account is None and self._checkpoint is not None and self._checkpoint.exists():
-            state = load_checkpoint(self._checkpoint)
+        if self._account is None and self._checkpoint is not None and self._checkpoint.path.exists():
+            state = self._checkpoint.load()
             scope = (state["gid"], state["account_id"], state["sync_transactions"])
             if scope != (self.gid, account.account_id, self.sync_transactions):
                 raise ValueError("Checkpoint belongs to a different account, gid or sync mode")
@@ -80,7 +80,7 @@ class XueqiuExchange(BaseExchange):
         if self._checkpoint is None:
             return
         account = self.account()
-        save_checkpoint(self._checkpoint, {
+        self._checkpoint.save({
             "gid": self.gid, "account_id": account.account_id, "sync_transactions": self.sync_transactions,
             "init_cash": account.init_cash, "cash": account.cash, "positions": account.positions,
             "orders": self._ledger.orders, "executions": self._ledger.executions,

@@ -26,7 +26,7 @@
 
 ## 断网后继续
 
-创建 Exchange 时设置 `checkpoint_path="output/xueqiu-run.json"`。每次回测用自己的文件，运行时让该策略独占目标雪球账本。文件保存账户、订单队列和待确认的写入。
+创建 Exchange 时设置 `checkpoint_path="output/xueqiu-run.sqlite3"`。每次回测用自己的文件，运行时让该策略独占目标雪球账本。文件保存账户、订单队列和待确认的写入。已完成的历史按笔追加。
 
 连接恢复后，用同一个文件和同一个 `gid` 注册 Exchange。按下列顺序继续：
 
