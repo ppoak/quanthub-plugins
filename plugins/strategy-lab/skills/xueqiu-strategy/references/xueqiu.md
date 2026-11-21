@@ -26,7 +26,7 @@
 
 ## 收盘保存和继续运行
 
-创建 Exchange 时传入 `store=XueqiuStore("output/xueqiu-run.sqlite3")`，也可以直接传 `checkpoint_path="output/xueqiu-run.sqlite3"`。目录和文件名都可以改。相对路径从启动命令时所在的目录算起，缺少的目录会自动创建。每次回测用自己的文件。
+创建 Exchange 时传入 `store=XueqiuStore("output/xueqiu-run.sqlite3")`。在 `XueqiuStore` 里设置目录和文件名。相对路径从启动命令时所在的目录算起，缺少的目录会自动创建。每次回测用自己的文件。
 
 日行情调用一次 `advance()`。用日内行情时，盘中传 `is_close=False`，收盘这一轮传 `is_close=True`。当天撮合结束，用收盘价算出净值后，SQLite 一次保存账户、未成交订单和新增历史。盘中断开时，文件里保留的是上次成功收盘的状态。
 

@@ -5,7 +5,6 @@ from __future__ import annotations
 import math
 from collections import deque
 from decimal import Decimal
-from pathlib import Path
 from typing import Any
 
 import pandas as pd
@@ -34,7 +33,7 @@ class XueqiuExchange(BaseExchange):
     def __init__(
         self, client: XueqiuClient, *, gid: str,
         sync_transactions: bool = False, commission=None, tax=None,
-        store: XueqiuStore | None = None, checkpoint_path: str | Path | None = None,
+        store: XueqiuStore | None = None,
     ) -> None:
         self.client = client
         self.gid = str(gid)
@@ -48,9 +47,7 @@ class XueqiuExchange(BaseExchange):
         self._last_executions: list[Execution] = []
         self._account: XueqiuAccount | None = None
         self._ledger: XueqiuLedger | None = None
-        if store is not None and checkpoint_path is not None:
-            raise ValueError("Specify either store or checkpoint_path")
-        self.store = XueqiuStore(checkpoint_path) if checkpoint_path is not None else store
+        self.store = store
         self._replay: DailyReplay | None = None
         self._pending_write: dict | None = None
         self._active_bar: pd.Timestamp | None = None
