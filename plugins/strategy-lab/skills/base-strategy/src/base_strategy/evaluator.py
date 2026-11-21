@@ -110,8 +110,10 @@ def evaluate_executions(
             shares.iloc[loc:, shares.columns.get_loc(code)] -= quantity
             cash_delta.iloc[loc:] += float(getattr(execution, "cashflow", quantity * price - comm))
 
-    aligned_prices = price_matrix.reindex(columns=shares.columns).ffill().fillna(0.0)
-    market_value = (shares * aligned_prices).sum(axis=1)
+    marks = price_matrix.reindex(columns=shares.columns).apply(pd.to_numeric, errors="coerce").astype(float)
+    marks = marks.where(np.isfinite(marks) & (marks > 0))
+    position_values = (shares * marks).where(shares.ne(0), 0.0)
+    market_value = position_values.sum(axis=1, skipna=False)
     cash = initial_cash + cash_delta
     frame = pd.DataFrame(
         {
@@ -134,21 +136,21 @@ def evaluate_asset_value(
     """Compute performance, excluding optional per-bar external cash flows from returns."""
 
     metrics = _empty_metrics()
-    if asset_value.empty or "nav" not in asset_value or len(asset_value) < 2:
-        if not asset_value.empty and "nav" in asset_value:
-            metrics["init_cash"] = _first_number(asset_value["nav"])
-            metrics["final_nav"] = _last_number(asset_value["nav"])
+    if asset_value.empty or "nav" not in asset_value:
         return pd.Series(metrics, name="metrics")
 
-    nav = pd.to_numeric(asset_value["nav"], errors="coerce").dropna()
+    actual_nav = pd.to_numeric(asset_value["nav"], errors="coerce").astype(float)
+    final_nav = float(actual_nav.iloc[-1])
+    nav = actual_nav.dropna()
     if len(nav) < 2:
+        metrics["init_cash"] = float(nav.iloc[0]) if not nav.empty else None
+        metrics["final_nav"] = final_nav
         return pd.Series(metrics, name="metrics")
 
     returns = nav.pct_change(fill_method=None).dropna()
     init_cash = float(nav.iloc[0])
-    final_nav = float(nav.iloc[-1])
     performance_nav = nav
-    growth = final_nav / init_cash if init_cash > 0 else None
+    growth = float(nav.iloc[-1]) / init_cash if init_cash > 0 else None
     if "external_flow" in asset_value:
         flows = pd.to_numeric(asset_value["external_flow"], errors="coerce").reindex(nav.index).fillna(0)
         if flows.ne(0).any():
@@ -294,16 +296,6 @@ def _drawdown_period(drawdown: pd.Series, pct_drawdown: pd.Series) -> int | None
         return 0
     start_loc = end_loc - int(np.argmax(zero_mask[::-1]))
     return int(end_loc - start_loc)
-
-
-def _first_number(series: pd.Series) -> float | None:
-    values = pd.to_numeric(series, errors="coerce").dropna()
-    return float(values.iloc[0]) if not values.empty else None
-
-
-def _last_number(series: pd.Series) -> float | None:
-    values = pd.to_numeric(series, errors="coerce").dropna()
-    return float(values.iloc[-1]) if not values.empty else None
 
 
 def _align_timestamp(value: Any, timezone) -> pd.Timestamp:
