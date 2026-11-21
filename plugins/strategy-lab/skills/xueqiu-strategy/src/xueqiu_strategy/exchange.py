@@ -114,8 +114,11 @@ class XueqiuExchange(BaseExchange):
         """Record a cash transfer locally, then optionally publish it remotely."""
         account = self.account()
         amount = float(amount)
-        if not math.isfinite(amount) or (amount < 0 and -amount > account.cash):
-            raise ValueError("Transfer amount is invalid or exceeds available cash")
+        if not math.isfinite(amount):
+            raise ValueError("Transfer amount must be finite")
+        amount = float(round_cash(amount))
+        if -amount > account.cash:
+            raise ValueError("Transfer exceeds available cash")
         trade_dt = pd.to_datetime(trade_time)
         execution = Execution(
             execution_id=Execution._auto_id("xueqiu-transfer"),
@@ -154,6 +157,8 @@ class XueqiuExchange(BaseExchange):
             if fill_px is None:
                 continue
             fee = float((commission or self.commission)(order, fill_px, order.remaining))
+            if not math.isfinite(fee) or fee < 0:
+                raise ValueError("Execution commission must be finite and non-negative")
             insufficient = (
                 order.side == Order.SELL and available_quantity(order.code, bar_dt) < order.remaining
             ) or (

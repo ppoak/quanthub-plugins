@@ -15,8 +15,8 @@ class XueqiuAccount(BaseAccount):
 
     def __init__(self, *, account_id: str, init_cash: float = 0.0) -> None:
         self.account_id = str(account_id)
-        self.init_cash = float(init_cash)
-        self.cash = float(init_cash)
+        self.init_cash = float(round_cash(init_cash))
+        self.cash = self.init_cash
         self.positions: dict[str, XueqiuPosition] = {}
 
     @property
@@ -37,16 +37,13 @@ class XueqiuAccount(BaseAccount):
         return self.positions[code]
 
     def replace(self, *, cash: float, positions: dict[str, XueqiuPosition]) -> None:
-        self.cash = float(cash)
+        self.cash = float(round_cash(cash))
         self.positions = dict(positions)
 
     def apply_execution(self, execution: XueqiuExecution) -> None:
         if execution.side in {XueqiuExecution.BUY, XueqiuExecution.SELL}:
             self.position(execution.code).apply_execution(execution)
-        if execution.side == XueqiuExecution.BUY:
-            self.cash = float(round_cash(self.cash) + Decimal(str(execution.cashflow)))
-        else:
-            self.cash += execution.cashflow
+        self.cash = float(round_cash(self.cash) + Decimal(str(execution.cashflow)))
 
     def update_prices(self, prices) -> None:
         """Mark existing positions from a code-to-price mapping."""

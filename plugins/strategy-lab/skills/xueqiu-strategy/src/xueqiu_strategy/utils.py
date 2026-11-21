@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 from decimal import Decimal, ROUND_HALF_UP
 
 
@@ -10,9 +11,19 @@ def round_cash(amount: float | Decimal) -> Decimal:
     return Decimal(str(amount)).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
 
 
+def trade_amount(price: float, quantity: float, commission: float, *, buy: bool) -> Decimal:
+    """Return the signed net trade amount rounded to cents."""
+    if not math.isfinite(commission) or commission < 0:
+        raise ValueError("Execution commission must be finite and non-negative")
+    gross = Decimal(str(price)) * Decimal(str(quantity))
+    # Commission callbacks may use binary floats. Retain their meaningful digits
+    # before rounding the net amount, so half-cent ties are not rounded down by noise.
+    fee = Decimal(format(commission, ".15g")) if isinstance(commission, float) else Decimal(str(commission))
+    return round_cash((-gross if buy else gross) - fee)
+
+
 def buy_amount(price: float, quantity: float, commission: float) -> Decimal:
-    """Return the total payable for a buy, rounded to cents."""
-    return round_cash(Decimal(str(price)) * Decimal(str(quantity)) + Decimal(str(commission)))
+    return -trade_amount(price, quantity, commission, buy=True)
 
 
 def to_xueqiu_symbol(code: str) -> str:

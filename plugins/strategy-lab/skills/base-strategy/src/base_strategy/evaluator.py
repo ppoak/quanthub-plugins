@@ -92,20 +92,20 @@ def evaluate_executions(
         price = float(_execution_price(execution) or 0.0)
         comm = float(_execution_comm(execution) or 0.0)
         if side in {"TRANSFER", "DEPOSIT"}:
-            cash_delta.iloc[loc:] += quantity * price
+            cash_delta.iloc[loc:] += float(getattr(execution, "cashflow", quantity * price))
             continue
         if side in {"WITHDRAW", "WITHDRAWAL"}:
-            cash_delta.iloc[loc:] -= quantity * price
+            cash_delta.iloc[loc:] += float(getattr(execution, "cashflow", -quantity * price))
             continue
         if code and code != "CASH" and code not in shares:
             shares[code] = 0.0
             price_matrix[code] = np.nan
         if side == "BUY":
             shares.iloc[loc:, shares.columns.get_loc(code)] += quantity
-            cash_delta.iloc[loc:] += getattr(execution, "cashflow", -(quantity * price + comm))
+            cash_delta.iloc[loc:] += float(getattr(execution, "cashflow", -(quantity * price + comm)))
         elif side == "SELL":
             shares.iloc[loc:, shares.columns.get_loc(code)] -= quantity
-            cash_delta.iloc[loc:] += quantity * price - comm
+            cash_delta.iloc[loc:] += float(getattr(execution, "cashflow", quantity * price - comm))
 
     aligned_prices = price_matrix.reindex(columns=shares.columns).ffill().fillna(0.0)
     market_value = (shares * aligned_prices).sum(axis=1)

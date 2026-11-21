@@ -3,9 +3,10 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from decimal import Decimal
 from typing import Any, ClassVar
 
-from .utils import buy_amount, round_cash
+from .utils import round_cash, trade_amount
 
 
 @dataclass
@@ -37,12 +38,10 @@ class XueqiuExecution:
 
     @property
     def cashflow(self) -> float:
-        gross = self.quantity * self.price
-        if self.side == self.BUY:
-            return -float(buy_amount(self.price, self.quantity, self.comm))
-        if self.side == self.SELL:
-            return gross - self.comm
-        return -gross if self.side == self.WITHDRAW else gross
+        if self.side in {self.BUY, self.SELL}:
+            return float(trade_amount(self.price, self.quantity, self.comm, buy=self.side == self.BUY))
+        amount = round_cash(Decimal(str(self.quantity)) * Decimal(str(self.price)))
+        return float(-amount if self.side == self.WITHDRAW else amount)
 
     @classmethod
     def _auto_id(cls, prefix: str | None = None) -> str:
@@ -181,7 +180,7 @@ class XueqiuPosition:
         elif execution.side == XueqiuExecution.SELL:
             if execution.quantity > self.quantity + 1e-9:
                 raise ValueError(f"sell quantity exceeds current position for {self.code}")
-            self.realized_pnl_value += execution.quantity * (execution.price - self.cost_price) - execution.comm
+            self.realized_pnl_value += execution.cashflow - execution.quantity * self.cost_price
             self.quantity -= execution.quantity
             if self.quantity <= 1e-9:
                 self.quantity = 0.0
