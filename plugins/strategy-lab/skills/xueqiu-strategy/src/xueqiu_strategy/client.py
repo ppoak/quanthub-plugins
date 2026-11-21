@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import http.client
 import json
 import math
+import socket
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -12,7 +14,7 @@ from typing import Any, Iterable, Optional
 import pandas as pd
 
 from base_strategy.client import BaseClient
-from .errors import XueqiuAPIError
+from .errors import XueqiuAPIError, XueqiuTransportError
 from .models import XueqiuOrder
 from .utils import from_xueqiu_symbol, to_xueqiu_symbol
 
@@ -207,14 +209,24 @@ class XueqiuClient(BaseClient):
                 "result_code": self.NETWORK_CODE,
                 "result_data": None,
                 "result_msg": f"HTTP {exc.code}: {exc.reason}",
+                "http_status": exc.code,
             }
         except urllib.error.URLError as exc:
             return {
                 "result_code": self.NETWORK_CODE,
                 "result_data": None,
                 "result_msg": str(exc.reason),
+                "request_not_sent": isinstance(exc.reason, (ConnectionRefusedError, socket.gaierror)),
             }
-        return json.loads(body) if body else {}
+        except (OSError, http.client.HTTPException, UnicodeError) as exc:
+            raise XueqiuTransportError("Xueqiu response could not be read") from exc
+        try:
+            result = json.loads(body)
+        except ValueError as exc:
+            raise XueqiuTransportError("Xueqiu did not return valid JSON") from exc
+        if not isinstance(result, dict):
+            raise XueqiuTransportError("Xueqiu did not return a JSON object")
+        return result
 
     def ensure_success(self, result: dict[str, Any], action: str) -> dict[str, Any]:
         """Raise ``XueqiuAPIError`` unless a platform response succeeded."""
