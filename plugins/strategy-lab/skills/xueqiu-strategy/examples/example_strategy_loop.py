@@ -20,6 +20,9 @@ def run_example(*, token: str = "offline", gid: str = "offline", sync_transactio
     exchange.register(account, ledger=ledger)
     client.connect(exchange, account_id=account.account_id)
 
+    initial_cash = account.cash
+    initial_positions = {code: position.quantity for code, position in account.positions.items()}
+
     code = "000001.SZ"
     dates = pd.to_datetime(["2026-01-05", "2026-01-06", "2026-01-07"])
     prices = pd.DataFrame({code: [10.0, 11.0, 12.0]}, index=dates)
@@ -35,7 +38,9 @@ def run_example(*, token: str = "offline", gid: str = "offline", sync_transactio
         elif index == 1:
             client.sell(code, 40, created_at=timestamp)
 
-    metrics = evaluate_executions(ledger.executions, prices=prices, initial_cash=account.init_cash)
+    metrics = evaluate_executions(
+        ledger.executions, prices=prices, initial_cash=initial_cash, initial_positions=initial_positions,
+    )
     return {
         "account_id": account.account_id,
         "orders": len(ledger.orders),

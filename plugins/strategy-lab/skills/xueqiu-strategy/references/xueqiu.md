@@ -33,4 +33,6 @@
 
 ## 导出本次运行
 
-需要 Excel 时安装 `base-strategy[excel]`，再调用 `xueqiu_strategy.stores.to_excel(account, ledger, "output/xueqiu.xlsx")`。表格包含账户、持仓、订单和成交。示例也演示了如何用成交记录计算资产变化。
+需要 Excel 时安装 `base-strategy[excel]`，再调用 `xueqiu_strategy.stores.to_excel(account, ledger, "output/xueqiu.xlsx")`。表格包含账户、持仓、订单和成交。
+
+从已有账本开始回测时，先用 `account.replace()` 载入同一天的现金和持仓。开始交易前保存这份现金和持仓股数，分别传给 `evaluate_executions()` 的 `initial_cash` 和 `initial_positions`。行情从同一起点开始，成交只传入快照之后的新记录。
