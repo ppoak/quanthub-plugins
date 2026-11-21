@@ -301,20 +301,26 @@ class XueqiuClient(BaseClient):
             },
         )
 
-    def transaction_records(self, gid: str, row: int = 50) -> dict[str, Any]:
+    def transaction_records(self, gid: str, row: int = 50, *, pos: int | str | None = None) -> dict[str, Any]:
         """Return raw transaction records for an investment group."""
+        params = {"gid": gid, "row": row}
+        if pos is not None:
+            params["pos"] = pos
         return self.request(
             "GET",
             "transaction/list.json",
-            params={"gid": gid, "row": row},
+            params=params,
         )
 
-    def bank_transfer_records(self, gid: str, row: int = 50) -> dict[str, Any]:
+    def bank_transfer_records(self, gid: str, row: int = 50, *, pos: int | str | None = None) -> dict[str, Any]:
         """Return raw bank-transfer records for an investment group."""
+        params = {"gid": gid, "row": row}
+        if pos is not None:
+            params["pos"] = pos
         return self.request(
             "GET",
             "bank_transfer/query.json",
-            params={"gid": gid, "row": row},
+            params=params,
         )
 
     def get_market_price(self, symbols: str | Iterable[str]) -> list[dict[str, Any]]:

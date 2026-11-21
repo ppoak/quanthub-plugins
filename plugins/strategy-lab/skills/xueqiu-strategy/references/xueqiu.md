@@ -16,7 +16,7 @@
 | 成交记录 | `transaction_records(gid, row=50)` | `transactions` |
 | 入金和出金记录 | `bank_transfer_records(gid, row=50)` | `bank_transfers` |
 
-`ledger.order_history()` 和 `ledger.transfer_history()` 读取远端原始成交和划转记录。`ledger.execution_history(record=True)` 将可转换的远端成交按成交编号去重写入 `ledger.executions`。远端成交时间使用北京时间。
+`ledger.order_history()` 和 `ledger.transfer_history()` 读取远端原始成交和划转记录。`ledger.execution_history(record=True)` 将可转换的远端成交按成交编号去重写入 `ledger.executions`。远端成交时间使用北京时间。历史方法默认读取一页，可传入响应里的 `pos` 从下一页开始，或设置 `all_pages=True` 读取全部。
 
 ## 把成交写到雪球
 

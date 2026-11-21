@@ -29,22 +29,19 @@ class XueqiuLedger(BaseLedger):
         self.account = account
         self.account_id = str(getattr(account, "account_id", "") or "")
 
-    def order_history(self, *, row: int = 50) -> list[dict[str, Any]]:
+    def order_history(
+        self, *, row: int = 50, pos: int | str | None = None, all_pages: bool = False,
+    ) -> list[dict[str, Any]]:
         """Return raw remote Xueqiu transaction records."""
-        client = self._require_client()
-        result = client.ensure_success(
-            client.transaction_records(self._require_gid(), row=row),
-            "transaction records",
-        )
-        data = result.get("result_data") or {}
-        records = data.get("transactions", data.get("list", []))
-        return records if isinstance(records, list) else []
+        return self._history(self._require_client().transaction_records, "transactions", row, pos, all_pages)
 
-    def execution_history(self, *, row: int = 50, record: bool = False) -> list[XueqiuExecution]:
+    def execution_history(
+        self, *, row: int = 50, record: bool = False, pos: int | str | None = None, all_pages: bool = False,
+    ) -> list[XueqiuExecution]:
         """Return remote Xueqiu transaction records as normalized executions."""
         executions = [
             execution
-            for item in self.order_history(row=row)
+            for item in self.order_history(row=row, pos=pos, all_pages=all_pages)
             if (execution := self._transaction_to_execution(item)) is not None
         ]
         if record:
@@ -52,16 +49,28 @@ class XueqiuLedger(BaseLedger):
                 self.record_execution(execution)
         return executions
 
-    def transfer_history(self, *, row: int = 50) -> list[dict[str, Any]]:
+    def transfer_history(
+        self, *, row: int = 50, pos: int | str | None = None, all_pages: bool = False,
+    ) -> list[dict[str, Any]]:
         """Return raw remote bank-transfer records."""
+        return self._history(self._require_client().bank_transfer_records, "bank_transfers", row, pos, all_pages)
+
+    def _history(self, fetch, key: str, row: int, pos, all_pages: bool) -> list[dict[str, Any]]:
         client = self._require_client()
-        result = client.ensure_success(
-            client.bank_transfer_records(self._require_gid(), row=row),
-            "bank transfer records",
-        )
-        data = result.get("result_data") or {}
-        records = data.get("bank_transfers", data.get("list", []))
-        return records if isinstance(records, list) else []
+        gid = self._require_gid()
+        records: list[dict[str, Any]] = []
+        cursors = {str(pos)} if pos is not None else set()
+        while True:
+            response = fetch(gid, row=row) if pos is None else fetch(gid, row=row, pos=pos)
+            data = client.ensure_success(response, key).get("result_data") or {}
+            page = data.get(key, data.get("list", []))
+            if not isinstance(page, list) or not page:
+                return records
+            records.extend(page)
+            pos = data.get("pos")
+            if not all_pages or not pos or str(pos) in cursors:
+                return records
+            cursors.add(str(pos))
 
     def _transaction_to_execution(self, item: dict[str, Any]) -> XueqiuExecution | None:
         symbol = from_xueqiu_symbol(item.get("symbol") or item.get("code") or "")
