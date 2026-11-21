@@ -8,6 +8,7 @@ from typing import Any
 import pandas as pd
 
 from base_strategy.ledger import BaseLedger
+from .fees import fee_amount
 from .models import XueqiuExecution
 from .utils import from_xueqiu_symbol, shanghai_time
 
@@ -106,6 +107,14 @@ class XueqiuLedger(BaseLedger):
             timestamp = shanghai_time(pd.to_datetime(item.get("date") or item.get("created_at"), errors="coerce"))
         if not execution_id or pd.isna(timestamp):
             return None
+        gross = Decimal(str(price)) * Decimal(str(quantity))
+        commission = item.get("commission")
+        if commission is None:
+            commission = item.get("comm")
+        fees = {
+            "commission": fee_amount(commission, item.get("commission_rate") or 0, gross, "commission"),
+            "tax": fee_amount(item.get("tax"), item.get("tax_rate") or 0, gross, "tax"),
+        }
         return XueqiuExecution(
             execution_id=str(execution_id),
             account_id=self.account_id or "",
@@ -115,11 +124,9 @@ class XueqiuLedger(BaseLedger):
             code=symbol,
             quantity=quantity,
             price=price,
-            comm=float(
-                Decimal(str(item.get("commission") or item.get("comm") or 0))
-                + Decimal(str(item.get("tax") or 0))
-            ),
-            meta={"xueqiu_remote": item, "xueqiu_tid": str(execution_id)},
+            comm=float(sum(fees.values())),
+            meta={"xueqiu_remote": item, "xueqiu_tid": str(execution_id),
+                  "fees": {name: float(amount) for name, amount in fees.items()}},
         )
 
     def _require_client(self) -> Any:

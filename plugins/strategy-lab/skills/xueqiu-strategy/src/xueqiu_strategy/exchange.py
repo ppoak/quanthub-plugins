@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import math
 from collections import deque
+from decimal import Decimal
 from pathlib import Path
 from typing import Any
 
@@ -14,14 +15,11 @@ from .account import XueqiuAccount
 from .checkpoint import Checkpoint, restore_execution, restore_order, restore_position
 from .client import XueqiuClient
 from .errors import XueqiuAPIError
+from .fees import confirmed_fees, fee_amount, wire_rates
 from .ledger import XueqiuLedger
 from .models import XueqiuExecution as Execution, XueqiuOrder as Order
 from .remote import confirm_write, transfer_ids
 from .utils import buy_amount, round_cash, shanghai_time, to_xueqiu_symbol
-
-
-def _zero_commission(order, price, quantity) -> float:
-    return 0.0
 
 
 class XueqiuExchange(BaseExchange):
@@ -35,12 +33,14 @@ class XueqiuExchange(BaseExchange):
 
     def __init__(
         self, client: XueqiuClient, *, gid: str,
-        sync_transactions: bool = False, commission=None, checkpoint_path: str | Path | None = None,
+        sync_transactions: bool = False, commission=None, tax=None, checkpoint_path: str | Path | None = None,
     ) -> None:
         self.client = client
         self.gid = str(gid)
         self.sync_transactions = bool(sync_transactions)
-        self.commission = commission or _zero_commission
+        self.commission = commission
+        self.tax = tax
+        self._cash_residual = Decimal(0)
         self._order_queue: deque[Order] = deque()
         self._order_map: dict[str, Order] = {}
         self._last_orders: list[Order] = []
@@ -87,7 +87,7 @@ class XueqiuExchange(BaseExchange):
             "queue": self.order_queue, "last_orders": [order.order_id for order in self._last_orders],
             "last_executions": [item.execution_id for item in self._last_executions],
             "active_bar": self._active_bar, "last_completed_bar": self.last_completed_bar,
-            "pending_write": self._pending_write,
+            "pending_write": self._pending_write, "cash_residual": str(self._cash_residual),
         })
 
     def _restore(self, state: dict) -> None:
@@ -106,6 +106,7 @@ class XueqiuExchange(BaseExchange):
         self._last_executions = [executions[key] for key in state["last_executions"]]
         self._active_bar = pd.Timestamp(state["active_bar"]) if state["active_bar"] else None
         self.last_completed_bar = pd.Timestamp(state["last_completed_bar"]) if state["last_completed_bar"] else None
+        self._cash_residual = Decimal(state.get("cash_residual", "0"))
         self._pending_write = state["pending_write"]
         if self._pending_write is not None:
             pending = self._pending_write
@@ -204,7 +205,7 @@ class XueqiuExchange(BaseExchange):
         return execution
 
     def advance(
-        self, bar: pd.DataFrame, *, timestamp, commission=None,
+        self, bar: pd.DataFrame, *, timestamp, commission=None, tax=None,
         available_quantity=None, commission_rate: float = 0.0, tax_rate: float = 0.0,
     ) -> tuple[list[Order], list[Execution]]:
         """Match queued orders, settle each fill, then mark existing holdings."""
@@ -232,14 +233,12 @@ class XueqiuExchange(BaseExchange):
                 fill_px = self.match(order, bar.loc[order.code])
                 if fill_px is None:
                     continue
-                fee = float((commission or self.commission)(order, fill_px, order.remaining))
-                if not math.isfinite(fee) or fee < 0:
-                    raise ValueError("Execution commission must be finite and non-negative")
+                fees = self._fees(order, fill_px, commission, tax, commission_rate, tax_rate)
                 insufficient = (
                     order.side == Order.SELL and available_quantity(order.code, bar_dt) < order.remaining
                 ) or (
                     order.side == Order.BUY
-                    and buy_amount(fill_px, order.remaining, fee) > round_cash(account.cash)
+                    and buy_amount(fill_px, order.remaining, sum(fees[0].values())) > round_cash(account.cash)
                 )
                 if insufficient:
                     order.status = Order.MARGIN
@@ -248,10 +247,7 @@ class XueqiuExchange(BaseExchange):
                     self.record_order(order)
                     self._save()
                     continue
-                self.record_execution(
-                    order, trade_time=bar_dt, price=fill_px, commission=fee,
-                    commission_rate=commission_rate, tax_rate=tax_rate,
-                )
+                self._record_fill(order, bar_dt, fill_px, *fees)
             completed = True
         finally:
             account.update_prices(bar["close"] if "close" in bar.columns else {})
@@ -290,43 +286,60 @@ class XueqiuExchange(BaseExchange):
                     return limit
         return None
 
+    def _fees(self, order: Order, price: float, commission, tax,
+              commission_rate: float, tax_rate: float) -> tuple[dict, list[str]]:
+        gross = Decimal(str(price)) * Decimal(str(order.remaining))
+        amounts, explicit = {}, []
+        for name, value, rate in (("commission", commission, commission_rate), ("tax", tax, tax_rate)):
+            source = value if value is not None else getattr(self, name)
+            if source is not None:
+                explicit.append(name)
+            amount = source(order, price, order.remaining) if callable(source) else source
+            amounts[name] = fee_amount(amount, rate, gross, name)
+        return amounts, explicit
+
     def execute(
         self, order: Order, *, price: float, quantity: float, timestamp,
-        commission=None, commission_rate: float = 0.0, tax_rate: float = 0.0,
+        commission=None, tax=None, commission_rate: float = 0.0, tax_rate: float = 0.0,
     ) -> Execution:
         """Fill a whole local order at an explicit price."""
         if quantity != order.remaining:
             raise ValueError("Xueqiu execution must fill the remaining order quantity")
-        fee = float((commission or self.commission)(order, price, quantity))
         return self.record_execution(
-            order, trade_time=timestamp, price=price, commission=fee,
+            order, trade_time=timestamp, price=price, commission=commission, tax=tax,
             commission_rate=commission_rate, tax_rate=tax_rate,
         )
 
     def record_execution(
-        self, order: Order, *, trade_time, price: float, commission: float = 0.0,
+        self, order: Order, *, trade_time, price: float, commission=None, tax=None,
         commission_rate: float = 0.0, tax_rate: float = 0.0,
     ) -> Execution:
         """Settle immediately after a fill is confirmed."""
+        price = float(price)
+        if not math.isfinite(price) or price <= 0:
+            raise ValueError("Execution price is invalid")
+        fees = self._fees(order, price, commission, tax, commission_rate, tax_rate)
+        return self._record_fill(order, trade_time, price, *fees)
+
+    def _record_fill(self, order: Order, timestamp, price: float, fees: dict, explicit: list[str]) -> Execution:
         self._require_no_pending()
         account = self.account()
         if self._order_map.get(order.order_id) is not order:
             raise ValueError("Order is not pending on this exchange")
-        price, commission = float(price), float(commission)
-        if not math.isfinite(price) or price <= 0 or not math.isfinite(commission) or commission < 0:
-            raise ValueError("Execution price or commission is invalid")
+        charge = sum(fees.values())
         if order.side == Order.SELL and order.remaining > account.available_quantity(order.code):
             raise ValueError("Sell quantity exceeds available position")
-        if order.side == Order.BUY and buy_amount(price, order.remaining, commission) > round_cash(account.cash):
+        if order.side == Order.BUY and buy_amount(price, order.remaining, charge) > round_cash(account.cash):
             raise ValueError("Buy amount exceeds available cash")
         execution = Execution(
             execution_id=Execution._auto_id("xueqiu-local"), order_id=order.order_id,
-            account_id=account.account_id, datetime=shanghai_time(trade_time),
+            account_id=account.account_id, datetime=shanghai_time(timestamp),
             side=order.side, code=order.code, quantity=order.remaining,
-            price=price, comm=commission,
+            price=price, comm=float(charge),
+            meta={"fees": {name: float(amount) for name, amount in fees.items()}, "explicit_fees": explicit},
         )
         if self.sync_transactions:
-            self.sync_execution(order, execution, commission_rate=commission_rate, tax_rate=tax_rate)
+            self.sync_execution(order, execution)
         else:
             self._finish_fill(order, execution)
             self._save()
@@ -349,11 +362,22 @@ class XueqiuExchange(BaseExchange):
         if pending is None:
             return None
         execution = pending["execution"]
-        result = confirm_write(self.client, pending, self._save, confirmed_absent=confirmed_absent)
+        result = pending.get("confirmed_result")
+        if result is None:
+            result = confirm_write(self.client, pending, self._save, confirmed_absent=confirmed_absent)
         execution.meta["xueqiu_response"] = result
         if pending["kind"] == "transaction":
             order = self._order_map[pending["order_id"]]
             data = result.get("result_data") or {}
+            if pending.get("verify_fees"):
+                try:
+                    self._confirm_fees(execution, data if isinstance(data, dict) else {}, pending["params"])
+                except (ArithmeticError, ValueError, XueqiuAPIError) as exc:
+                    pending["confirmed_result"] = result
+                    self._save()
+                    if isinstance(exc, XueqiuAPIError):
+                        raise
+                    raise XueqiuAPIError("Xueqiu returned invalid confirmed fees") from exc
             tid = data.get("tid") if isinstance(data, dict) else None
             tid = tid or result.get("tid")
             if tid:
@@ -365,6 +389,23 @@ class XueqiuExchange(BaseExchange):
         self._pending_write = None
         self._save()
         return execution
+
+    def _confirm_fees(self, execution: Execution, data: dict, params: dict) -> None:
+        gross = Decimal(str(execution.price)) * Decimal(str(execution.quantity))
+        balance = round_cash(self.account().cash)
+        buy = execution.side == Execution.BUY
+        fees, wire_cost = confirmed_fees(
+            data, gross=gross, expected={name: Decimal(str(value)) for name, value in execution.meta["fees"].items()},
+            explicit=execution.meta["explicit_fees"], rates=params,
+        )
+        net = -gross if buy else gross
+        local_balance = balance + round_cash(net - sum(fees.values()))
+        remote_balance = balance + self._cash_residual + net - wire_cost
+        if (buy and local_balance < 0) or round_cash(remote_balance) != local_balance:
+            raise XueqiuAPIError("Confirmed Xueqiu fees do not preserve the local cash balance")
+        execution.comm = float(sum(fees.values()))
+        execution.meta["fees"] = {name: float(value) for name, value in fees.items()}
+        self._cash_residual = remote_balance - local_balance
 
     def sync_execution(
         self, order: Order, execution: Execution, *,
@@ -381,15 +422,26 @@ class XueqiuExchange(BaseExchange):
             raise ValueError("Order is not pending on this exchange")
         comment = str(order.meta.get("comment", ""))
         execution.meta["xueqiu_comment"] = f"{comment} [ql:{execution.execution_id.split('#')[-1]}]".strip()
+        gross = Decimal(str(execution.price)) * Decimal(str(execution.quantity))
+        if "fees" not in execution.meta:
+            charges = {"commission": fee_amount(execution.comm, commission_rate, gross, "commission"),
+                       "tax": fee_amount(None, tax_rate, gross, "tax")}
+            execution.meta["fees"] = {name: float(value) for name, value in charges.items()}
+            execution.meta["explicit_fees"] = ["commission"]
+        rates = wire_rates(
+            gross, {name: Decimal(str(value)) for name, value in execution.meta["fees"].items()},
+            buy=execution.side == Execution.BUY, balance=round_cash(self.account().cash),
+            residual=self._cash_residual,
+        )
         params = dict(
             gid=self.gid, symbol=to_xueqiu_symbol(execution.code), shares=int(execution.quantity),
             transaction_type=self.BUY_TRANSACTION if execution.side == Execution.BUY else self.SELL_TRANSACTION,
             date=str(shanghai_time(execution.datetime).date()), price=execution.price,
-            tax_rate=tax_rate, commission_rate=commission_rate, comment=execution.meta["xueqiu_comment"],
+            comment=execution.meta["xueqiu_comment"], **rates,
         )
         self._pending_write = {
             "kind": "transaction", "params": params, "execution": execution,
-            "order_id": order.order_id, "in_flight": False,
+            "order_id": order.order_id, "in_flight": False, "verify_fees": True,
         }
         self.recover_pending()
         return execution.meta["xueqiu_response"]
