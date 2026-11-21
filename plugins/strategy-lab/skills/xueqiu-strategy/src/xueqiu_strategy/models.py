@@ -4,7 +4,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from decimal import Decimal
-from typing import Any, ClassVar
+from typing import Any
+from uuid import uuid4
 
 from .utils import round_cash, shanghai_time, trade_amount
 
@@ -30,8 +31,6 @@ class XueqiuExecution:
     TRANSFER = "TRANSFER"
     WITHDRAW = "WITHDRAW"
 
-    _CLASS_SEQ: ClassVar[dict[str, int]] = {}
-
     @property
     def timestamp(self) -> Any:
         if self.datetime is None:
@@ -47,9 +46,7 @@ class XueqiuExecution:
 
     @classmethod
     def _auto_id(cls, prefix: str | None = None) -> str:
-        key = prefix or cls.__name__
-        cls._CLASS_SEQ[key] = cls._CLASS_SEQ.get(key, 0) + 1
-        return f"{key}#{cls._CLASS_SEQ[key]}"
+        return f"{prefix or cls.__name__}#{uuid4().hex}"
 
 
 @dataclass
@@ -87,12 +84,9 @@ class XueqiuOrder:
     BUY = "BUY"
     SELL = "SELL"
 
-    _CLASS_SEQ: ClassVar[dict[str, int]] = {}
-
     @classmethod
     def _auto_id(cls, user_id: str | None = None) -> str:
-        cls._CLASS_SEQ[cls.__name__] = cls._CLASS_SEQ.get(cls.__name__, 0) + 1
-        base = f"{cls.__name__}#{cls._CLASS_SEQ[cls.__name__]}"
+        base = f"{cls.__name__}#{uuid4().hex}"
         return f"{base}:{user_id}" if user_id else base
 
     def attach(self, execution: XueqiuExecution) -> None:
