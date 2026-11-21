@@ -19,6 +19,24 @@ from .models import XueqiuOrder
 from .utils import from_xueqiu_symbol, to_xueqiu_symbol
 
 
+def _trusted_url(url: str) -> bool:
+    parsed = urllib.parse.urlsplit(url)
+    host = parsed.hostname or ""
+    return (
+        parsed.scheme == "https" and parsed.username is None and parsed.port in {None, 443}
+        and (host == "xueqiu.com" or host.endswith(".xueqiu.com"))
+    )
+
+
+class _XueqiuRedirectHandler(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        redirect = super().redirect_request(req, fp, code, msg, headers, newurl)
+        cookie = req.get_header("Cookie")
+        if redirect is not None and cookie and _trusted_url(newurl):
+            redirect.add_unredirected_header("Cookie", cookie)
+        return redirect
+
+
 class XueqiuClient(BaseClient):
     """Low-level HTTP client for Xueqiu quote and paper-trading APIs.
 
@@ -156,7 +174,7 @@ class XueqiuClient(BaseClient):
             raise ValueError("Xueqiu token is required")
         self.token = token
         self.timeout = timeout
-        self.opener = opener or urllib.request.build_opener()
+        self.opener = opener or urllib.request.build_opener(_XueqiuRedirectHandler())
         self.headers = {
             "User-Agent": (
                 "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
@@ -172,10 +190,7 @@ class XueqiuClient(BaseClient):
             url = path_or_url
         else:
             url = urllib.parse.urljoin(self.BASE_URL_TRADE, path_or_url)
-        parsed = urllib.parse.urlsplit(url)
-        host = parsed.hostname or ""
-        if (parsed.scheme != "https" or parsed.username is not None or parsed.port not in {None, 443}
-                or not (host == "xueqiu.com" or host.endswith(".xueqiu.com"))):
+        if not _trusted_url(url):
             raise ValueError("Xueqiu requests require a trusted HTTPS endpoint")
         if params:
             query = urllib.parse.urlencode(params)
