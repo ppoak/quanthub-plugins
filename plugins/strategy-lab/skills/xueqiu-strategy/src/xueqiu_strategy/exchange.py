@@ -12,13 +12,13 @@ import pandas as pd
 
 from base_strategy.exchange import BaseExchange
 from .account import XueqiuAccount
-from .checkpoint import Checkpoint, restore_execution, restore_order, restore_position
 from .client import XueqiuClient
 from .errors import XueqiuAPIError
 from .fees import confirmed_fees, fee_amount, wire_rates
 from .ledger import XueqiuLedger
 from .models import XueqiuExecution as Execution, XueqiuOrder as Order
 from .remote import confirm_write, transfer_ids
+from .stores import XueqiuStore, restore_execution, restore_order, restore_position
 from .utils import buy_amount, round_cash, shanghai_time, to_xueqiu_symbol
 
 
@@ -33,7 +33,8 @@ class XueqiuExchange(BaseExchange):
 
     def __init__(
         self, client: XueqiuClient, *, gid: str,
-        sync_transactions: bool = False, commission=None, tax=None, checkpoint_path: str | Path | None = None,
+        sync_transactions: bool = False, commission=None, tax=None,
+        store: XueqiuStore | None = None, checkpoint_path: str | Path | None = None,
     ) -> None:
         self.client = client
         self.gid = str(gid)
@@ -47,7 +48,9 @@ class XueqiuExchange(BaseExchange):
         self._last_executions: list[Execution] = []
         self._account: XueqiuAccount | None = None
         self._ledger: XueqiuLedger | None = None
-        self._checkpoint = Checkpoint(Path(checkpoint_path)) if checkpoint_path is not None else None
+        if store is not None and checkpoint_path is not None:
+            raise ValueError("Specify either store or checkpoint_path")
+        self.store = XueqiuStore(checkpoint_path) if checkpoint_path is not None else store
         self._pending_write: dict | None = None
         self._active_bar: pd.Timestamp | None = None
         self.last_completed_bar: pd.Timestamp | None = None
@@ -59,8 +62,8 @@ class XueqiuExchange(BaseExchange):
         if ledger.gid is not None and ledger.gid != self.gid:
             raise ValueError("Ledger and exchange must use the same gid")
         state = None
-        if self._account is None and self._checkpoint is not None and self._checkpoint.path.exists():
-            state = self._checkpoint.load()
+        if self._account is None and self.store is not None and self.store.path.exists():
+            state = self.store.load()
             scope = (state["gid"], state["account_id"], state["sync_transactions"])
             if scope != (self.gid, account.account_id, self.sync_transactions):
                 raise ValueError("Checkpoint belongs to a different account, gid or sync mode")
@@ -77,10 +80,10 @@ class XueqiuExchange(BaseExchange):
         return self._active_bar
 
     def _save(self) -> None:
-        if self._checkpoint is None:
+        if self.store is None:
             return
         account = self.account()
-        self._checkpoint.save({
+        self.store.save({
             "gid": self.gid, "account_id": account.account_id, "sync_transactions": self.sync_transactions,
             "init_cash": account.init_cash, "cash": account.cash, "positions": account.positions,
             "orders": self._ledger.orders, "executions": self._ledger.executions,
@@ -217,7 +220,7 @@ class XueqiuExchange(BaseExchange):
             if bar_dt != self._active_bar:
                 raise ValueError("Resume the unfinished bar before advancing to a different timestamp")
         else:
-            if self._checkpoint is not None and self.last_completed_bar is not None and bar_dt <= self.last_completed_bar:
+            if self.store is not None and self.last_completed_bar is not None and bar_dt <= self.last_completed_bar:
                 raise ValueError("The bar was already completed in this checkpoint")
             self._active_bar = bar_dt
             self._last_orders = []

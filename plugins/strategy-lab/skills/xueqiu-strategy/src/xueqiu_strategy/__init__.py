@@ -6,6 +6,7 @@ from .errors import XueqiuAPIError
 from .exchange import XueqiuExchange
 from .ledger import XueqiuLedger
 from .models import XueqiuExecution, XueqiuOrder, XueqiuPosition
+from .stores import XueqiuStore
 from .utils import from_xueqiu_symbol, to_xueqiu_symbol
 
 __all__ = [
@@ -17,6 +18,7 @@ __all__ = [
     "XueqiuExecution",
     "XueqiuOrder",
     "XueqiuPosition",
+    "XueqiuStore",
     "from_xueqiu_symbol",
     "to_xueqiu_symbol",
 ]
