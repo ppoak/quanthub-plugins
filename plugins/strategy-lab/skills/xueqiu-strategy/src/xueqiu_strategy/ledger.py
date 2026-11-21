@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from decimal import Decimal
 from typing import Any
 
 import pandas as pd
@@ -69,7 +70,12 @@ class XueqiuLedger(BaseLedger):
         if not symbol or quantity <= 0 or price <= 0:
             return None
         side_value = str(item.get("type") or item.get("side") or "").lower()
-        side = XueqiuExecution.SELL if side_value in {"2", "sell", "s"} else XueqiuExecution.BUY
+        if side_value in {"1", "buy", "b"}:
+            side = XueqiuExecution.BUY
+        elif side_value in {"2", "sell", "s"}:
+            side = XueqiuExecution.SELL
+        else:
+            return None
         execution_id = item.get("tid") or item.get("id") or item.get("transaction_id")
         if item.get("time") is not None:
             timestamp = pd.to_datetime(item["time"], unit="ms", utc=True, errors="coerce")
@@ -87,7 +93,10 @@ class XueqiuLedger(BaseLedger):
             code=symbol,
             quantity=quantity,
             price=price,
-            comm=float(item.get("commission") or item.get("comm") or 0.0),
+            comm=float(
+                Decimal(str(item.get("commission") or item.get("comm") or 0))
+                + Decimal(str(item.get("tax") or 0))
+            ),
             meta={"xueqiu_remote": item},
         )
 
