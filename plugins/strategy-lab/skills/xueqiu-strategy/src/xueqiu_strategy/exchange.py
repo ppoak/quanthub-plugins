@@ -17,7 +17,7 @@ from .errors import XueqiuAPIError
 from .fees import confirmed_fees, fee_amount, wire_rates
 from .ledger import XueqiuLedger
 from .models import XueqiuExecution as Execution, XueqiuOrder as Order
-from .remote import confirm_write, transfer_ids
+from .remote import DailyReplay, confirm_write, transfer_ids
 from .stores import XueqiuStore, restore_execution, restore_order, restore_position
 from .utils import buy_amount, round_cash, shanghai_time, to_xueqiu_symbol
 
@@ -51,8 +51,10 @@ class XueqiuExchange(BaseExchange):
         if store is not None and checkpoint_path is not None:
             raise ValueError("Specify either store or checkpoint_path")
         self.store = XueqiuStore(checkpoint_path) if checkpoint_path is not None else store
+        self._replay: DailyReplay | None = None
         self._pending_write: dict | None = None
         self._active_bar: pd.Timestamp | None = None
+        self._daily_checkpoint = True
         self.last_completed_bar: pd.Timestamp | None = None
 
     def register(self, account: XueqiuAccount, ledger: XueqiuLedger) -> None:
@@ -67,21 +69,24 @@ class XueqiuExchange(BaseExchange):
             scope = (state["gid"], state["account_id"], state["sync_transactions"])
             if scope != (self.gid, account.account_id, self.sync_transactions):
                 raise ValueError("Checkpoint belongs to a different account, gid or sync mode")
+        first_registration = self._account is None
         ledger.subscribe(account)
         ledger.gid = self.gid
         self._account = account
         self._ledger = ledger
         if state is not None:
             self._restore(state)
+        if first_registration and self.store is not None and self.sync_transactions:
+            history = XueqiuLedger(client=self.client, gid=self.gid)
+            scope = (str(self.store.path.resolve()), self.gid, account.account_id)
+            self._replay = DailyReplay(history, scope, self.last_completed_bar)
 
     @property
     def interrupted_bar(self) -> pd.Timestamp | None:
-        """Return the unfinished bar to replay when resuming."""
+        """Return the unfinished bar in memory, including one restored from an older file."""
         return self._active_bar
 
-    def _save(self) -> None:
-        if self.store is None:
-            return
+    def _save_close(self, timestamp: pd.Timestamp, nav: float) -> None:
         account = self.account()
         self.store.save({
             "gid": self.gid, "account_id": account.account_id, "sync_transactions": self.sync_transactions,
@@ -89,8 +94,7 @@ class XueqiuExchange(BaseExchange):
             "orders": self._ledger.orders, "executions": self._ledger.executions,
             "queue": self.order_queue, "last_orders": [order.order_id for order in self._last_orders],
             "last_executions": [item.execution_id for item in self._last_executions],
-            "active_bar": self._active_bar, "last_completed_bar": self.last_completed_bar,
-            "pending_write": self._pending_write, "cash_residual": str(self._cash_residual),
+            "last_completed_bar": timestamp, "nav": nav, "cash_residual": str(self._cash_residual),
         })
 
     def _restore(self, state: dict) -> None:
@@ -107,10 +111,11 @@ class XueqiuExchange(BaseExchange):
         executions = {item.execution_id: item for item in self._ledger.executions}
         self._last_orders = [orders[key] for key in state["last_orders"]]
         self._last_executions = [executions[key] for key in state["last_executions"]]
-        self._active_bar = pd.Timestamp(state["active_bar"]) if state["active_bar"] else None
+        self._active_bar = pd.Timestamp(state["active_bar"]) if state.get("active_bar") else None
         self.last_completed_bar = pd.Timestamp(state["last_completed_bar"]) if state["last_completed_bar"] else None
+        self._daily_checkpoint = "nav" in state
         self._cash_residual = Decimal(state.get("cash_residual", "0"))
-        self._pending_write = state["pending_write"]
+        self._pending_write = state.get("pending_write")
         if self._pending_write is not None:
             pending = self._pending_write
             pending["execution"] = restore_execution(pending["execution"])
@@ -143,7 +148,6 @@ class XueqiuExchange(BaseExchange):
         order.status = Order.ACCEPTED
         self._order_queue.append(order)
         self._order_map[order.order_id] = order
-        self._save()
         return order
 
     def record_order(self, order: Order) -> None:
@@ -160,7 +164,6 @@ class XueqiuExchange(BaseExchange):
         order.cancel()
         self._remove_order(order)
         self.record_order(order)
-        self._save()
         return order
 
     def executions(self, **kwargs: Any) -> list[Execution]:
@@ -186,6 +189,7 @@ class XueqiuExchange(BaseExchange):
         if -amount > account.cash:
             raise ValueError("Transfer exceeds available cash")
         trade_dt = shanghai_time(trade_time)
+        self._require_open_day(trade_dt)
         execution = Execution(
             execution_id=Execution._auto_id("xueqiu-transfer"),
             account_id=account.account_id, datetime=trade_dt,
@@ -200,18 +204,19 @@ class XueqiuExchange(BaseExchange):
             self._pending_write = {
                 "kind": "bank_transfer", "params": params, "execution": execution,
                 "prior_ids": sorted(transfer_ids(self.client, self.gid)), "in_flight": False,
+                "replay": self._replay is not None,
             }
             self.recover_pending()
         else:
             self._settle_execution(execution)
-            self._save()
         return execution
 
     def advance(
         self, bar: pd.DataFrame, *, timestamp, commission=None, tax=None,
         available_quantity=None, commission_rate: float = 0.0, tax_rate: float = 0.0,
+        is_close: bool = True,
     ) -> tuple[list[Order], list[Execution]]:
-        """Match queued orders, settle each fill, then mark existing holdings."""
+        """Match and mark one bar. Persist only after the daily close."""
         account = self.account()
         if not isinstance(bar, pd.DataFrame):
             raise TypeError("advance() requires a pd.DataFrame indexed by code")
@@ -220,13 +225,11 @@ class XueqiuExchange(BaseExchange):
             if bar_dt != self._active_bar:
                 raise ValueError("Resume the unfinished bar before advancing to a different timestamp")
         else:
-            if self.store is not None and self.last_completed_bar is not None and bar_dt <= self.last_completed_bar:
-                raise ValueError("The bar was already completed in this checkpoint")
+            self._require_open_day(bar_dt)
             self._active_bar = bar_dt
             self._last_orders = []
             self._last_executions = []
         available_quantity = available_quantity or account.available_quantity
-        completed = False
         try:
             if self._pending_write is not None:
                 self.recover_pending()
@@ -248,16 +251,19 @@ class XueqiuExchange(BaseExchange):
                     self._remove_order(order)
                     self._last_orders.append(order)
                     self.record_order(order)
-                    self._save()
                     continue
                 self._record_fill(order, bar_dt, fill_px, *fees)
-            completed = True
         finally:
             account.update_prices(bar["close"] if "close" in bar.columns else {})
-            if completed:
-                self.last_completed_bar = bar_dt
-                self._active_bar = None
-            self._save()
+        if is_close:
+            nav = account.net_asset_value
+            if self.store is not None:
+                if self._replay is not None:
+                    self._replay.check_close(str(bar_dt.date()))
+                self._save_close(bar_dt, nav)
+                self._daily_checkpoint = True
+            self.last_completed_bar = bar_dt
+        self._active_bar = None
         return self.last_orders, self.last_executions
 
     def match(self, order: Order, bar_row) -> float | None:
@@ -329,6 +335,8 @@ class XueqiuExchange(BaseExchange):
         account = self.account()
         if self._order_map.get(order.order_id) is not order:
             raise ValueError("Order is not pending on this exchange")
+        trade_dt = shanghai_time(timestamp)
+        self._require_open_day(trade_dt)
         charge = sum(fees.values())
         if order.side == Order.SELL and order.remaining > account.available_quantity(order.code):
             raise ValueError("Sell quantity exceeds available position")
@@ -336,7 +344,7 @@ class XueqiuExchange(BaseExchange):
             raise ValueError("Buy amount exceeds available cash")
         execution = Execution(
             execution_id=Execution._auto_id("xueqiu-local"), order_id=order.order_id,
-            account_id=account.account_id, datetime=shanghai_time(timestamp),
+            account_id=account.account_id, datetime=trade_dt,
             side=order.side, code=order.code, quantity=order.remaining,
             price=price, comm=float(charge),
             meta={"fees": {name: float(amount) for name, amount in fees.items()}, "explicit_fees": explicit},
@@ -345,7 +353,6 @@ class XueqiuExchange(BaseExchange):
             self.sync_execution(order, execution)
         else:
             self._finish_fill(order, execution)
-            self._save()
         return execution
 
     def _finish_fill(self, order: Order, execution: Execution) -> None:
@@ -354,6 +361,15 @@ class XueqiuExchange(BaseExchange):
         self._last_orders.append(order)
         self._settle_execution(execution)
         self.record_order(order)
+
+    def _require_open_day(self, timestamp: pd.Timestamp) -> None:
+        last_close = self.last_completed_bar
+        if self.store is None or last_close is None:
+            return
+        if self._daily_checkpoint and timestamp.date() <= last_close.date():
+            raise ValueError("The trading day was already saved in this checkpoint")
+        if timestamp <= last_close:
+            raise ValueError("The bar was already saved in this checkpoint")
 
     def _require_no_pending(self) -> None:
         if self._pending_write is not None:
@@ -366,8 +382,12 @@ class XueqiuExchange(BaseExchange):
             return None
         execution = pending["execution"]
         result = pending.get("confirmed_result")
+        if result is None and pending.get("replay") and not pending["in_flight"]:
+            row = self._replay.find(pending)
+            if row is not None:
+                result = {"result_code": self.client.SUCCESS_CODE, "result_data": row, "reconciled": True}
         if result is None:
-            result = confirm_write(self.client, pending, self._save, confirmed_absent=confirmed_absent)
+            result = confirm_write(self.client, pending, confirmed_absent=confirmed_absent)
         execution.meta["xueqiu_response"] = result
         if pending["kind"] == "transaction":
             order = self._order_map[pending["order_id"]]
@@ -377,7 +397,6 @@ class XueqiuExchange(BaseExchange):
                     self._confirm_fees(execution, data if isinstance(data, dict) else {}, pending["params"])
                 except (ArithmeticError, ValueError, XueqiuAPIError) as exc:
                     pending["confirmed_result"] = result
-                    self._save()
                     if isinstance(exc, XueqiuAPIError):
                         raise
                     raise XueqiuAPIError("Xueqiu returned invalid confirmed fees") from exc
@@ -388,9 +407,10 @@ class XueqiuExchange(BaseExchange):
             order.meta["xueqiu_response"] = result
             self._finish_fill(order, execution)
         else:
+            if self._replay is not None and "replay" not in pending:
+                self._replay.remember_restored_transfer(result)
             self._settle_execution(execution)
         self._pending_write = None
-        self._save()
         return execution
 
     def _confirm_fees(self, execution: Execution, data: dict, params: dict) -> None:
@@ -423,8 +443,6 @@ class XueqiuExchange(BaseExchange):
         self._require_no_pending()
         if self._order_map.get(order.order_id) is not order:
             raise ValueError("Order is not pending on this exchange")
-        comment = str(order.meta.get("comment", ""))
-        execution.meta["xueqiu_comment"] = f"{comment} [ql:{execution.execution_id.split('#')[-1]}]".strip()
         gross = Decimal(str(execution.price)) * Decimal(str(execution.quantity))
         if "fees" not in execution.meta:
             charges = {"commission": fee_amount(execution.comm, commission_rate, gross, "commission"),
@@ -436,15 +454,24 @@ class XueqiuExchange(BaseExchange):
             buy=execution.side == Execution.BUY, balance=round_cash(self.account().cash),
             residual=self._cash_residual,
         )
+        trade_dt = shanghai_time(execution.datetime)
+        self._require_open_day(trade_dt)
+        date = str(trade_dt.date())
+        comment = str(order.meta.get("comment", ""))
+        execution.meta["xueqiu_comment"] = (
+            self._replay.trade_comment(date, comment) if self._replay is not None
+            else f"{comment} [ql:{execution.execution_id.split('#')[-1]}]".strip()
+        )
         params = dict(
             gid=self.gid, symbol=to_xueqiu_symbol(execution.code), shares=int(execution.quantity),
             transaction_type=self.BUY_TRANSACTION if execution.side == Execution.BUY else self.SELL_TRANSACTION,
-            date=str(shanghai_time(execution.datetime).date()), price=execution.price,
+            date=date, price=execution.price,
             comment=execution.meta["xueqiu_comment"], **rates,
         )
         self._pending_write = {
             "kind": "transaction", "params": params, "execution": execution,
             "order_id": order.order_id, "in_flight": False, "verify_fees": True,
+            "replay": self._replay is not None,
         }
         self.recover_pending()
         return execution.meta["xueqiu_response"]

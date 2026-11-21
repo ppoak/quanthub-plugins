@@ -8,6 +8,7 @@ from typing import Any
 import pandas as pd
 
 from base_strategy.ledger import BaseLedger
+from .errors import XueqiuAPIError
 from .fees import fee_amount
 from .models import XueqiuExecution
 from .utils import from_xueqiu_symbol, shanghai_time
@@ -76,9 +77,13 @@ class XueqiuLedger(BaseLedger):
         cursors = {str(pos)} if pos is not None else set()
         while True:
             response = fetch(gid, row=row) if pos is None else fetch(gid, row=row, pos=pos)
-            data = client.ensure_success(response, key).get("result_data") or {}
-            page = data.get(key, data.get("list", []))
-            if not isinstance(page, list) or not page:
+            data = client.ensure_success(response, key).get("result_data")
+            page = data.get(key, data.get("list")) if isinstance(data, dict) else None
+            if not isinstance(page, list):
+                if all_pages:
+                    raise XueqiuAPIError(f"Missing {key} ledger records")
+                return records
+            if not page:
                 return records
             records.extend(page)
             pos = data.get("pos")
