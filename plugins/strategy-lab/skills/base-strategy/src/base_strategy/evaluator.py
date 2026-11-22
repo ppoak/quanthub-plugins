@@ -103,7 +103,8 @@ def evaluate_executions(
             cash_delta.iloc[location:] += cashflow
             external_flow.iloc[location] += cashflow
             same_daily_date = index[location].date() == timestamp.date() and index[location].time() == datetime_time(0, 0)
-            if location > 0 and timestamp > index[location - 1] and not same_daily_date:
+            between_valuations = location > 0 and index[location - 1] < timestamp < index[location]
+            if between_valuations and not same_daily_date:
                 late_flow.iloc[location] += cashflow
             continue
         if code and code != "CASH" and code not in shares:
