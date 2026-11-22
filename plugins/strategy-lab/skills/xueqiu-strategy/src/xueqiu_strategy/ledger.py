@@ -11,7 +11,7 @@ from base_strategy.ledger import BaseLedger
 from .errors import XueqiuAPIError
 from .fees import fee_amount
 from .models import XueqiuExecution
-from .utils import from_xueqiu_symbol, shanghai_time
+from .utils import cash_amount, from_xueqiu_symbol, shanghai_time
 
 
 class XueqiuLedger(BaseLedger):
@@ -69,6 +69,48 @@ class XueqiuLedger(BaseLedger):
     ) -> list[dict[str, Any]]:
         """Return raw remote bank-transfer records."""
         return self._history(self._require_client().bank_transfer_records, "bank_transfers", row, pos, all_pages)
+
+    def transfer_execution(self, item: dict[str, Any]) -> XueqiuExecution | None:
+        """Convert one remote cash transfer into a canonical execution."""
+        execution_id = item.get("tid") or item.get("id") or item.get("transfer_id")
+        amount = item.get("amount")
+        if not execution_id or amount is None:
+            return None
+        try:
+            amount = float(amount)
+        except (TypeError, ValueError):
+            return None
+        if amount < 0:
+            amount = abs(amount)
+        side = XueqiuExecution.TRANSFER if str(item.get("type")) == "1" else XueqiuExecution.WITHDRAW
+        if item.get("time") is not None:
+            timestamp = shanghai_time(pd.to_datetime(item["time"], unit="ms", utc=True, errors="coerce"))
+        else:
+            timestamp = shanghai_time(pd.to_datetime(item.get("date"), errors="coerce"))
+        if pd.isna(timestamp):
+            return None
+        return XueqiuExecution(
+            execution_id=str(execution_id), account_id=self.account_id or "", datetime=timestamp,
+            side=side, code="CASH", quantity=amount, price=1.0,
+            meta={"xueqiu_remote": item, "xueqiu_tid": str(execution_id)},
+        )
+
+    def transfer_executions(self, *, all_pages: bool = True) -> list[XueqiuExecution]:
+        """Return remote cash transfers as canonical executions."""
+        return [
+            execution
+            for item in self.transfer_history(all_pages=all_pages)
+            if (execution := self.transfer_execution(item)) is not None
+        ]
+
+    def reconstruct_cash(self, initial_cash, *, include_transfers: bool = False) -> Decimal:
+        """Rebuild exact cash from remote transactions and optional transfers."""
+        cash = cash_amount(initial_cash)
+        transactions = self.execution_history(all_pages=True)
+        transfers = self.transfer_executions(all_pages=True) if include_transfers else []
+        for execution in sorted(transactions + transfers, key=lambda item: shanghai_time(item.datetime)):
+            cash = cash_amount(cash + Decimal(str(execution.cashflow)))
+        return cash
 
     def _history(self, fetch, key: str, row: int, pos, all_pages: bool) -> list[dict[str, Any]]:
         client = self._require_client()

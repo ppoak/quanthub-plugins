@@ -9,7 +9,7 @@ import pandas as pd
 
 from base_strategy.account import BaseAccount
 from .models import XueqiuExecution, XueqiuPosition
-from .utils import round_cash
+from .utils import cash_amount
 
 
 class XueqiuAccount(BaseAccount):
@@ -17,17 +17,17 @@ class XueqiuAccount(BaseAccount):
 
     def __init__(self, *, account_id: str, init_cash: float = 0.0) -> None:
         self.account_id = str(account_id)
-        self.init_cash = float(round_cash(init_cash))
+        self.init_cash = cash_amount(init_cash)
         self.cash = self.init_cash
         self.positions: dict[str, XueqiuPosition] = {}
 
     @property
     def book_value(self) -> float:
-        return sum(position.book_value for position in self.positions.values())
+        return sum((position.book_value for position in self.positions.values()), Decimal(0))
 
     @property
     def market_value(self) -> float:
-        return sum(position.market_value for position in self.positions.values() if position.quantity)
+        return sum((position.market_value for position in self.positions.values() if position.quantity), Decimal(0))
 
     @property
     def net_asset_value(self) -> float:
@@ -39,13 +39,13 @@ class XueqiuAccount(BaseAccount):
         return self.positions[code]
 
     def replace(self, *, cash: float, positions: dict[str, XueqiuPosition]) -> None:
-        self.cash = float(round_cash(cash))
+        self.cash = cash_amount(cash)
         self.positions = dict(positions)
 
     def apply_execution(self, execution: XueqiuExecution) -> None:
         if execution.side in {XueqiuExecution.BUY, XueqiuExecution.SELL}:
             self.position(execution.code).apply_execution(execution)
-        self.cash = float(round_cash(self.cash) + Decimal(str(execution.cashflow)))
+        self.cash = cash_amount(self.cash + Decimal(str(execution.cashflow)))
 
     def update_prices(self, prices) -> None:
         """Mark existing positions from a code-to-price mapping."""

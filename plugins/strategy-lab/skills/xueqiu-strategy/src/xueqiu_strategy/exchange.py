@@ -18,7 +18,7 @@ from .ledger import XueqiuLedger
 from .models import XueqiuExecution as Execution, XueqiuOrder as Order
 from .remote import DailyReplay, confirm_write, transfer_ids
 from .stores import XueqiuStore, restore_execution, restore_order, restore_position
-from .utils import buy_amount, round_cash, shanghai_time, to_xueqiu_symbol
+from .utils import buy_amount, cash_amount, round_cash, shanghai_time, to_xueqiu_symbol
 
 
 class XueqiuExchange(BaseExchange):
@@ -73,10 +73,39 @@ class XueqiuExchange(BaseExchange):
         self._ledger = ledger
         if state is not None:
             self._restore(state)
-        if first_registration and self.store is not None and self.sync_transactions:
+        if first_registration and self.sync_transactions:
             history = XueqiuLedger(client=self.client, gid=self.gid)
-            scope = (str(self.store.path.resolve()), self.gid, account.account_id)
-            self._replay = DailyReplay(history, scope, self.last_completed_bar)
+            if state is None:
+                account.cash = history.reconstruct_cash(account.init_cash)
+            if self.store is not None:
+                scope = (str(self.store.path.resolve()), self.gid, account.account_id)
+                self._replay = DailyReplay(history, scope, self.last_completed_bar)
+                self._recover_remote_transfers()
+
+    def _recover_remote_transfers(self) -> None:
+        """Apply remote transfers absent from the saved local ledger."""
+        known = {
+            str(item.meta.get("xueqiu_tid"))
+            for item in self._ledger.executions
+            if item.meta.get("xueqiu_tid")
+        }
+        for execution in self._ledger.transfer_executions(all_pages=True):
+            if execution.execution_id in known:
+                continue
+            self._settle_execution(execution)
+            if self._replay is not None:
+                self._replay.remember_restored_transfer(
+                    {"result_data": execution.meta.get("xueqiu_remote", {})}
+                )
+
+    def _known_transfer(self, timestamp: pd.Timestamp, amount: Decimal) -> Execution | None:
+        for execution in self._ledger.executions:
+            if execution.code != "CASH" or not execution.meta.get("xueqiu_tid"):
+                continue
+            if shanghai_time(execution.datetime).date() == timestamp.date() \
+                    and Decimal(str(execution.quantity)) == amount:
+                return execution
+        return None
 
     @property
     def interrupted_bar(self) -> pd.Timestamp | None:
@@ -91,12 +120,31 @@ class XueqiuExchange(BaseExchange):
             "orders": self._ledger.orders, "executions": self._ledger.executions,
             "queue": self.order_queue, "last_orders": [order.order_id for order in self._last_orders],
             "last_executions": [item.execution_id for item in self._last_executions],
+            "active_bar": self._active_bar, "pending_write": self._pending_write,
             "last_completed_bar": timestamp, "nav": nav, "cash_residual": str(self._cash_residual),
         })
 
+    def _save_failure(self) -> None:
+        """Persist a failed bar and its unresolved remote write."""
+        account = self.account()
+        self.store.save({
+            "gid": self.gid, "account_id": account.account_id, "sync_transactions": self.sync_transactions,
+            "init_cash": account.init_cash, "cash": account.cash, "positions": account.positions,
+            "orders": self._ledger.orders, "executions": self._ledger.executions,
+            "queue": self.order_queue, "last_orders": [order.order_id for order in self._last_orders],
+            "last_executions": [item.execution_id for item in self._last_executions],
+            "active_bar": self._active_bar, "pending_write": self._pending_write,
+            "last_completed_bar": self.last_completed_bar, "nav": account.net_asset_value,
+            "cash_residual": str(self._cash_residual),
+        })
+
+    def _update_pending_orders(self) -> None:
+        if self.store is not None:
+            self.store.update_pending_orders(self.order_queue)
+
     def _restore(self, state: dict) -> None:
         account = self.account()
-        account.init_cash = state["init_cash"]
+        account.init_cash = cash_amount(state["init_cash"])
         account.replace(cash=state["cash"], positions={
             code: restore_position(item) for code, item in state["positions"].items()
         })
@@ -145,6 +193,7 @@ class XueqiuExchange(BaseExchange):
         order.status = Order.ACCEPTED
         self._order_queue.append(order)
         self._order_map[order.order_id] = order
+        self._update_pending_orders()
         return order
 
     def record_order(self, order: Order) -> None:
@@ -161,6 +210,7 @@ class XueqiuExchange(BaseExchange):
         order.cancel()
         self._remove_order(order)
         self.record_order(order)
+        self._update_pending_orders()
         return order
 
     def executions(self, **kwargs: Any) -> list[Execution]:
@@ -179,14 +229,20 @@ class XueqiuExchange(BaseExchange):
         """Apply a cash transfer, confirming it first when mirroring to Xueqiu."""
         self._require_no_pending()
         account = self.account()
-        amount = float(amount)
-        if not math.isfinite(amount):
-            raise ValueError("Transfer amount must be finite")
-        amount = float(round_cash(amount))
+        try:
+            amount = cash_amount(amount)
+        except (TypeError, ValueError, ArithmeticError) as exc:
+            raise ValueError("Transfer amount must be finite") from exc
         if -amount > account.cash:
             raise ValueError("Transfer exceeds available cash")
         trade_dt = shanghai_time(trade_time)
         self._require_open_day(trade_dt)
+        if self.sync_transactions:
+            existing = self._known_transfer(trade_dt, amount)
+            if existing is not None:
+                self._last_orders = []
+                self._last_executions = [existing]
+                return existing
         execution = Execution(
             execution_id=Execution._auto_id("xueqiu-transfer"),
             account_id=account.account_id, datetime=trade_dt,
@@ -227,6 +283,7 @@ class XueqiuExchange(BaseExchange):
             self._last_orders = []
             self._last_executions = []
         available_quantity = available_quantity or account.available_quantity
+        completed = False
         try:
             if self._pending_write is not None:
                 self.recover_pending()
@@ -241,7 +298,7 @@ class XueqiuExchange(BaseExchange):
                     order.side == Order.SELL and available_quantity(order.code, bar_dt) < order.remaining
                 ) or (
                     order.side == Order.BUY
-                    and buy_amount(fill_px, order.remaining, sum(fees[0].values())) > round_cash(account.cash)
+                    and buy_amount(fill_px, order.remaining, sum(fees[0].values())) > account.cash
                 )
                 if insufficient:
                     order.status = Order.MARGIN
@@ -250,8 +307,11 @@ class XueqiuExchange(BaseExchange):
                     self.record_order(order)
                     continue
                 self._record_fill(order, bar_dt, fill_px, *fees)
+            completed = True
         finally:
             account.update_prices(bar["close"] if "close" in bar.columns else {})
+            if not completed and self.store is not None:
+                self._save_failure()
         if is_close:
             nav = account.net_asset_value
             if self.store is not None:
@@ -334,17 +394,17 @@ class XueqiuExchange(BaseExchange):
             raise ValueError("Order is not pending on this exchange")
         trade_dt = shanghai_time(timestamp)
         self._require_open_day(trade_dt)
-        charge = sum(fees.values())
+        charge = sum(fees.values(), Decimal(0))
         if order.side == Order.SELL and order.remaining > account.available_quantity(order.code):
             raise ValueError("Sell quantity exceeds available position")
-        if order.side == Order.BUY and buy_amount(price, order.remaining, charge) > round_cash(account.cash):
+        if order.side == Order.BUY and buy_amount(price, order.remaining, charge) > account.cash:
             raise ValueError("Buy amount exceeds available cash")
         execution = Execution(
             execution_id=Execution._auto_id("xueqiu-local"), order_id=order.order_id,
             account_id=account.account_id, datetime=trade_dt,
             side=order.side, code=order.code, quantity=order.remaining,
-            price=price, comm=float(charge),
-            meta={"fees": {name: float(amount) for name, amount in fees.items()}, "explicit_fees": explicit},
+            price=price, comm=charge,
+            meta={"fees": dict(fees), "explicit_fees": explicit},
         )
         if self.sync_transactions:
             self.sync_execution(order, execution)
@@ -379,10 +439,14 @@ class XueqiuExchange(BaseExchange):
             return None
         execution = pending["execution"]
         result = pending.get("confirmed_result")
-        if result is None and pending.get("replay") and not pending["in_flight"]:
+        if result is None and pending.get("replay"):
             row = self._replay.find(pending)
             if row is not None:
                 result = {"result_code": self.client.SUCCESS_CODE, "result_data": row, "reconciled": True}
+            elif pending.get("in_flight"):
+                raise XueqiuAPIError(
+                    "Xueqiu write is still unresolved; check the remote ledger before retrying"
+                )
         if result is None:
             result = confirm_write(self.client, pending, confirmed_absent=confirmed_absent)
         execution.meta["xueqiu_response"] = result
@@ -412,19 +476,19 @@ class XueqiuExchange(BaseExchange):
 
     def _confirm_fees(self, execution: Execution, data: dict, params: dict) -> None:
         gross = Decimal(str(execution.price)) * Decimal(str(execution.quantity))
-        balance = round_cash(self.account().cash)
+        balance = self.account().cash
         buy = execution.side == Execution.BUY
         fees, wire_cost = confirmed_fees(
             data, gross=gross, expected={name: Decimal(str(value)) for name, value in execution.meta["fees"].items()},
             explicit=execution.meta["explicit_fees"], rates=params,
         )
         net = -gross if buy else gross
-        local_balance = balance + round_cash(net - sum(fees.values()))
+        local_balance = cash_amount(balance + net - sum(fees.values(), Decimal(0)))
         remote_balance = balance + self._cash_residual + net - wire_cost
-        if (buy and local_balance < 0) or round_cash(remote_balance) != local_balance:
+        if (buy and local_balance < 0) or cash_amount(remote_balance) != local_balance:
             raise XueqiuAPIError("Confirmed Xueqiu fees do not preserve the local cash balance")
-        execution.comm = float(sum(fees.values()))
-        execution.meta["fees"] = {name: float(value) for name, value in fees.items()}
+        execution.comm = sum(fees.values(), Decimal(0))
+        execution.meta["fees"] = dict(fees)
         self._cash_residual = remote_balance - local_balance
 
     def sync_execution(
@@ -444,11 +508,11 @@ class XueqiuExchange(BaseExchange):
         if "fees" not in execution.meta:
             charges = {"commission": fee_amount(execution.comm, commission_rate, gross, "commission"),
                        "tax": fee_amount(None, tax_rate, gross, "tax")}
-            execution.meta["fees"] = {name: float(value) for name, value in charges.items()}
+            execution.meta["fees"] = dict(charges)
             execution.meta["explicit_fees"] = ["commission"]
         rates = wire_rates(
             gross, {name: Decimal(str(value)) for name, value in execution.meta["fees"].items()},
-            buy=execution.side == Execution.BUY, balance=round_cash(self.account().cash),
+            buy=execution.side == Execution.BUY, balance=self.account().cash,
             residual=self._cash_residual,
         )
         trade_dt = shanghai_time(execution.datetime)
@@ -476,3 +540,4 @@ class XueqiuExchange(BaseExchange):
     def _remove_order(self, order: Order) -> None:
         self._order_queue = deque(item for item in self._order_queue if item is not order)
         self._order_map.pop(order.order_id, None)
+        self._update_pending_orders()

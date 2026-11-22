@@ -7,7 +7,7 @@ from decimal import Decimal
 from typing import Any
 from uuid import uuid4
 
-from .utils import round_cash, shanghai_time, trade_amount
+from .utils import cash_amount, round_cash, shanghai_time, trade_amount
 
 
 @dataclass
@@ -38,11 +38,12 @@ class XueqiuExecution:
         return shanghai_time(self.datetime).tz_localize("Asia/Shanghai")
 
     @property
-    def cashflow(self) -> float:
-        if self.side in {self.BUY, self.SELL}:
-            return float(trade_amount(self.price, self.quantity, self.comm, buy=self.side == self.BUY))
-        amount = round_cash(Decimal(str(self.quantity)) * Decimal(str(self.price)))
-        return float(-amount if self.side == self.WITHDRAW else amount)
+    def cashflow(self) -> Decimal:
+        side = str(self.side).upper()
+        if side in {self.BUY, self.SELL}:
+            return trade_amount(self.price, self.quantity, self.comm, buy=side == self.BUY)
+        amount = cash_amount(Decimal(str(self.quantity)) * Decimal(str(self.price)))
+        return -amount if side == self.WITHDRAW else amount
 
     @classmethod
     def _auto_id(cls, prefix: str | None = None) -> str:
@@ -93,7 +94,7 @@ class XueqiuOrder:
         self.executions.append(execution)
         self.filled += execution.quantity
         self.amount += execution.price * execution.quantity
-        self.comm += execution.comm
+        self.comm = Decimal(str(self.comm)) + Decimal(str(execution.comm))
         self.executed_at = execution.datetime
         self.status = self.FILLED if self.filled >= self.quantity else self.PARTIAL
 
@@ -117,7 +118,7 @@ class XueqiuOrder:
         return self.status in {self.CREATED, self.SUBMITTED, self.ACCEPTED, self.PARTIAL}
 
     def sync_comm(self) -> None:
-        self.comm = sum(float(execution.comm) for execution in self.executions)
+        self.comm = sum((Decimal(str(execution.comm)) for execution in self.executions), Decimal(0))
 
     def cancel(self) -> None:
         if self.status in {self.CREATED, self.SUBMITTED, self.ACCEPTED, self.PARTIAL}:
@@ -132,7 +133,7 @@ class XueqiuPosition:
     quantity: float = 0.0
     cost_price: float = 0.0
     price: float = 0.0
-    realized_pnl_value: float = 0.0
+    realized_pnl_value: Decimal = Decimal(0)
     raw: dict[str, Any] | None = None
     executions: list[XueqiuExecution] = field(default_factory=list)
 
@@ -150,12 +151,12 @@ class XueqiuPosition:
         self.update_price(price)
 
     @property
-    def book_value(self) -> float:
-        return self.quantity * self.cost_price
+    def book_value(self) -> Decimal:
+        return Decimal(str(self.quantity)) * Decimal(str(self.cost_price))
 
     @property
-    def market_value(self) -> float:
-        return self.quantity * self.price
+    def market_value(self) -> Decimal:
+        return Decimal(str(self.quantity)) * Decimal(str(self.price))
 
     @property
     def unrealized_pnl(self) -> float:
@@ -163,7 +164,7 @@ class XueqiuPosition:
 
     @property
     def realized_pnl(self) -> float:
-        return float(round_cash(self.realized_pnl_value))
+        return round_cash(self.realized_pnl_value)
 
     def apply_execution(self, execution: XueqiuExecution) -> None:
         """Apply one locally executed fill to this position."""
@@ -171,12 +172,14 @@ class XueqiuPosition:
             new_quantity = self.quantity + execution.quantity
             if new_quantity > 0:
                 total_cost = self.book_value - execution.cashflow
-                self.cost_price = total_cost / new_quantity
+                self.cost_price = float(total_cost / Decimal(str(new_quantity)))
             self.quantity = new_quantity
         elif execution.side == XueqiuExecution.SELL:
             if execution.quantity > self.quantity + 1e-9:
                 raise ValueError(f"sell quantity exceeds current position for {self.code}")
-            self.realized_pnl_value += execution.cashflow - execution.quantity * self.cost_price
+            self.realized_pnl_value += execution.cashflow - (
+                Decimal(str(execution.quantity)) * Decimal(str(self.cost_price))
+            )
             self.quantity -= execution.quantity
             if self.quantity <= 1e-9:
                 self.quantity = 0.0

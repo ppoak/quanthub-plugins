@@ -15,7 +15,7 @@ import numpy as np
 import pandas as pd
 
 from .models import XueqiuExecution, XueqiuOrder, XueqiuPosition
-from .utils import shanghai_time
+from .utils import cash_amount, shanghai_time
 
 __all__ = ["XueqiuStore", "to_excel"]
 
@@ -28,28 +28,48 @@ class XueqiuStore:
         self._initialized = False
         self._offsets: dict[str, int] = {}
         self._collections: dict[str, list] = {}
+        self._pending_orders: dict[str, tuple[int, str]] = {}
 
     def load(self) -> dict:
         with self.path.open("rb") as stream:
             if stream.read(16) != b"SQLite format 3\0":
                 stream.seek(0)
-                return json.load(stream)
+                state = json.load(stream)
+                queue = state.get("queue", [])
+                self._pending_orders = {
+                    item["order_id"]: (position, _dumps(item))
+                    for position, item in enumerate(queue)
+                }
+                return state
 
         with closing(sqlite3.connect(self.path)) as db:
             state = json.loads(db.execute("SELECT payload FROM state WHERE id = 1").fetchone()[0])
             history: dict[str, list] = {}
             for kind, payload in db.execute("SELECT kind, payload FROM history ORDER BY kind, seq"):
                 history.setdefault(kind, []).append(json.loads(payload))
+            pending = []
+            if db.execute(
+                "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'pending_orders'"
+            ).fetchone():
+                pending = [json.loads(payload) for _, payload in db.execute(
+                    "SELECT position, payload FROM pending_orders ORDER BY position"
+                )]
         self._offsets = {kind: len(rows) for kind, rows in history.items()}
         self._initialized = True
         state["orders"] = history.get("orders", [])
         state["executions"] = history.get("executions", [])
+        state["queue"] = pending or state.get("queue", [])
+        self._pending_orders = {
+            item["order_id"]: (position, _dumps(item))
+            for position, item in enumerate(state["queue"])
+        }
         for code, position in state["positions"].items():
             position["executions"] = history.get(f"position:{code}", [])
         return state
 
     def save(self, data: dict) -> None:
         data = data.copy()
+        queue = data.pop("queue", [])
         histories = {kind: data.pop(kind) for kind in ("orders", "executions")}
         positions = {}
         for code, position in data["positions"].items():
@@ -59,28 +79,63 @@ class XueqiuStore:
         data["positions"] = positions
 
         if self._initialized:
-            self._write(self.path, data, histories)
+            self._write(self.path, data, histories, queue)
         else:
             # Build new databases away from the old file, including JSON migration.
             self.path.parent.mkdir(parents=True, exist_ok=True)
             with NamedTemporaryFile(dir=self.path.parent, delete=False) as stream:
                 temporary = Path(stream.name)
             try:
-                self._write(temporary, data, histories)
+                self._write(temporary, data, histories, queue)
                 temporary.replace(self.path)
             finally:
                 temporary.unlink(missing_ok=True)
             self._initialized = True
         self._offsets = {kind: len(rows) for kind, rows in histories.items()}
         self._collections = histories
+        self._pending_orders = {
+            order.order_id: (position, _dumps(order))
+            for position, order in enumerate(queue)
+        }
 
-    def _write(self, path: Path, data: dict, histories: dict[str, list]) -> None:
+    def update_pending_orders(self, orders: list) -> None:
+        """Persist only changed live orders while preserving queue order."""
+        current = {
+            order.order_id: (position, _dumps(order))
+            for position, order in enumerate(orders)
+        }
+        if not self._initialized:
+            self._pending_orders = current
+            return
+        if current == self._pending_orders:
+            return
+        with closing(sqlite3.connect(self.path)) as db, db:
+            db.execute(
+                "CREATE TABLE IF NOT EXISTS pending_orders "
+                "(order_id TEXT PRIMARY KEY, position INTEGER NOT NULL, payload TEXT NOT NULL)"
+            )
+            for order_id in self._pending_orders.keys() - current.keys():
+                db.execute("DELETE FROM pending_orders WHERE order_id = ?", (order_id,))
+            for order_id, (position, payload) in current.items():
+                if self._pending_orders.get(order_id) != (position, payload):
+                    db.execute(
+                        "INSERT INTO pending_orders VALUES (?, ?, ?) "
+                        "ON CONFLICT(order_id) DO UPDATE SET position=excluded.position, payload=excluded.payload",
+                        (order_id, position, payload),
+                    )
+        self._pending_orders = current
+
+    def _write(self, path: Path, data: dict, histories: dict[str, list], queue: list) -> None:
         with closing(sqlite3.connect(path)) as db, db:
             if not self._initialized:
                 db.execute("CREATE TABLE state (id INTEGER PRIMARY KEY, payload TEXT NOT NULL)")
                 db.execute(
                     "CREATE TABLE history (kind TEXT, seq INTEGER, payload TEXT NOT NULL, PRIMARY KEY(kind, seq))"
                 )
+            db.execute(
+                "CREATE TABLE IF NOT EXISTS pending_orders "
+                "(order_id TEXT PRIMARY KEY, position INTEGER NOT NULL, payload TEXT NOT NULL)"
+            )
             for kind in self._offsets.keys() - histories.keys():
                 db.execute("DELETE FROM history WHERE kind = ?", (kind,))
             for kind, rows in histories.items():
@@ -97,6 +152,11 @@ class XueqiuStore:
                 "INSERT INTO state VALUES (1, ?) ON CONFLICT(id) DO UPDATE SET payload=excluded.payload "
                 "WHERE state.payload != excluded.payload", (_dumps(data),),
             )
+            db.execute("DELETE FROM pending_orders")
+            db.executemany(
+                "INSERT INTO pending_orders VALUES (?, ?, ?)",
+                ((order.order_id, position, _dumps(order)) for position, order in enumerate(queue)),
+            )
 
 
 def _dumps(value) -> str:
@@ -104,7 +164,10 @@ def _dumps(value) -> str:
 
 
 def restore_execution(data: dict) -> XueqiuExecution:
-    return XueqiuExecution(**dict(data, datetime=_timestamp(data["datetime"])))
+    restored = dict(data, datetime=_timestamp(data["datetime"]))
+    if "comm" in restored:
+        restored["comm"] = cash_amount(restored["comm"])
+    return XueqiuExecution(**restored)
 
 
 def restore_order(data: dict) -> XueqiuOrder:
@@ -115,7 +178,9 @@ def restore_order(data: dict) -> XueqiuOrder:
 
 
 def restore_position(data: dict) -> XueqiuPosition:
-    return XueqiuPosition(**dict(data, executions=[restore_execution(item) for item in data["executions"]]))
+    restored = dict(data, executions=[restore_execution(item) for item in data["executions"]])
+    restored["realized_pnl_value"] = cash_amount(restored.get("realized_pnl_value", 0))
+    return XueqiuPosition(**restored)
 
 
 def _timestamp(value):
@@ -126,7 +191,7 @@ def _encode(value):
     if isinstance(value, (date, pd.Timestamp)):
         return value.isoformat()
     if isinstance(value, Decimal):
-        return float(value)
+        return str(value)
     if isinstance(value, np.generic):
         return value.item()
     if isinstance(value, (XueqiuExecution, XueqiuOrder, XueqiuPosition)):

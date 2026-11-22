@@ -8,9 +8,17 @@ from decimal import Decimal, ROUND_HALF_UP
 import pandas as pd
 
 
+def cash_amount(amount: float | Decimal) -> Decimal:
+    """Keep exact cash to four decimal places for local accounting."""
+    value = Decimal(str(amount))
+    if not value.is_finite():
+        raise ValueError("Cash amount must be finite")
+    return value.quantize(Decimal("0.0001"), rounding=ROUND_HALF_UP)
+
+
 def round_cash(amount: float | Decimal) -> Decimal:
-    """Round a cash amount to cents."""
-    return Decimal(str(amount)).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+    """Round a cash amount to cents for display and comparisons."""
+    return cash_amount(amount).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
 
 
 def trade_amount(price: float, quantity: float, commission: float, *, buy: bool) -> Decimal:
@@ -21,7 +29,7 @@ def trade_amount(price: float, quantity: float, commission: float, *, buy: bool)
     # Commission callbacks may use binary floats. Retain their meaningful digits
     # before rounding the net amount, so half-cent ties are not rounded down by noise.
     fee = Decimal(format(commission, ".15g")) if isinstance(commission, float) else Decimal(str(commission))
-    return round_cash((-gross if buy else gross) - fee)
+    return cash_amount((-gross if buy else gross) - fee)
 
 
 def buy_amount(price: float, quantity: float, commission: float) -> Decimal:

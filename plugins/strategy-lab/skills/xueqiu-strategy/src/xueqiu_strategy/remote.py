@@ -68,7 +68,7 @@ class DailyReplay:
             if self._last_close is not None and any(_record_date(row) == params["date"] for row in transfers):
                 raise XueqiuAPIError("Replay does not match the previously recorded Xueqiu transfer")
             return None
-        if self._last_close is None or params["date"] <= self._last_close or len(matches) != 1:
+        if len(matches) != 1:
             raise XueqiuAPIError("Cannot identify one Xueqiu transfer to replay; check the remote ledger")
         row = matches[0]
         transfers.remove(row)
