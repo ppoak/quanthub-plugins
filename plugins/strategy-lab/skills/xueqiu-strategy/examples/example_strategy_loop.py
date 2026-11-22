@@ -5,11 +5,18 @@ from __future__ import annotations
 import argparse
 import json
 import os
+from decimal import Decimal
 
 import pandas as pd
 
 from base_strategy import evaluate_executions
 from xueqiu_strategy import XueqiuAccount, XueqiuClient, XueqiuExchange, XueqiuLedger
+
+
+def _json_default(value):
+    if isinstance(value, Decimal):
+        return float(value)
+    raise TypeError(f"Object of type {type(value).__name__} is not JSON serializable")
 
 
 def run_example(*, token: str = "offline", gid: str = "offline", sync_transactions: bool = False) -> dict:
@@ -62,7 +69,10 @@ def main() -> None:
             parser.error("XUEQIU_TOKEN and XUEQIU_GID are required for remote writes")
     else:
         token = gid = "offline"
-    print(json.dumps(run_example(token=token, gid=gid, sync_transactions=args.sync_transactions)))
+    print(json.dumps(
+        run_example(token=token, gid=gid, sync_transactions=args.sync_transactions),
+        default=_json_default,
+    ))
 
 
 if __name__ == "__main__":

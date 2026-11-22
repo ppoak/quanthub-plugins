@@ -142,10 +142,13 @@ def restore_execution(data: dict) -> XueqiuExecution:
 
 
 def restore_order(data: dict) -> XueqiuOrder:
-    return XueqiuOrder(**dict(
+    restored = dict(
         data, created_at=_timestamp(data["created_at"]), executed_at=_timestamp(data["executed_at"]),
         executions=[restore_execution(item) for item in data["executions"]],
-    ))
+    )
+    if "comm" in restored:
+        restored["comm"] = Decimal(str(restored["comm"]))
+    return XueqiuOrder(**restored)
 
 
 def restore_position(data: dict) -> XueqiuPosition:
