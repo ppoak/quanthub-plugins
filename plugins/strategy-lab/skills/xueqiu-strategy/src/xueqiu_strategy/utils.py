@@ -22,14 +22,14 @@ def round_cash(amount: float | Decimal) -> Decimal:
 
 
 def trade_amount(price: float, quantity: float, commission: float, *, buy: bool) -> Decimal:
-    """Return the signed net trade amount rounded to cents."""
+    """Return the signed net trade amount without per-trade rounding."""
     if not math.isfinite(commission) or commission < 0:
         raise ValueError("Execution commission must be finite and non-negative")
     gross = Decimal(str(price)) * Decimal(str(quantity))
     # Commission callbacks may use binary floats. Retain their meaningful digits
     # before rounding the net amount, so half-cent ties are not rounded down by noise.
     fee = Decimal(format(commission, ".15g")) if isinstance(commission, float) else Decimal(str(commission))
-    return cash_amount((-gross if buy else gross) - fee)
+    return (-gross if buy else gross) - fee
 
 
 def buy_amount(price: float, quantity: float, commission: float) -> Decimal:

@@ -21,7 +21,6 @@ class DailyReplay:
         self._ledger = ledger
         self._prefix = f"[ql:{sha256(repr(scope).encode()).hexdigest()[:20]}/"
         self._sequence: dict[str, int] = {}
-        self._trades: dict[str, dict] | None = None
         self._transfers: list[dict] | None = None
         self._last_close = str(last_close.date()) if last_close is not None else None
 
@@ -29,39 +28,10 @@ class DailyReplay:
         sequence = self._sequence[day] = self._sequence.get(day, 0) + 1
         return f"{comment} {self._prefix}{day}/{sequence}]".strip()
 
-    def _load_trades(self) -> dict[str, dict]:
-        if self._trades is None:
-            trades = {}
-            for row in self._ledger.order_history(all_pages=True):
-                comment = str(row.get("comment", ""))
-                _, found, suffix = comment.rpartition(self._prefix)
-                if not found or not suffix.endswith("]") or suffix[:10] <= (self._last_close or ""):
-                    continue
-                key = found + suffix
-                if key in trades or not _row_id(row):
-                    raise XueqiuAPIError("Cannot identify one Xueqiu trade for a replay marker")
-                trades[key] = row
-            self._trades = trades
-        return self._trades
-
     def find(self, pending: dict) -> dict | None:
         params = pending["params"]
         if pending["kind"] == "transaction":
-            trades = self._load_trades()
-            key = self._prefix + params["comment"].split(self._prefix)[-1]
-            row = trades.get(key)
-            if row is None:
-                if any(candidate.startswith(self._prefix + params["date"]) for candidate in trades):
-                    raise XueqiuAPIError("Replay skipped a previously recorded Xueqiu trade")
-                return None
-            if (str(row.get("type")) != str(params["transaction_type"])
-                    or from_xueqiu_symbol(row.get("symbol", "")) != from_xueqiu_symbol(params["symbol"])
-                    or float(row.get("shares") or 0) != params["shares"]
-                    or float(row.get("price") or 0) != params["price"]
-                    or _record_date(row) != params["date"]):
-                raise XueqiuAPIError("Replay does not match the previously recorded Xueqiu trade")
-            del trades[key]
-            return row
+            return None
         transfers = self._load_transfers()
         matches = [row for row in transfers if _matches(row, {**pending, "prior_ids": ()})]
         if not matches:
@@ -86,8 +56,6 @@ class DailyReplay:
             transfers[:] = [row for row in transfers if _row_id(row) != remote_id]
 
     def check_close(self, day: str) -> None:
-        if any(key[len(self._prefix):][:10] <= day for key in self._load_trades()):
-            raise XueqiuAPIError("Replay left Xueqiu trades unsettled before the daily close")
         if self._last_close is not None and any(
             self._last_close < _record_date(row) <= day for row in self._load_transfers()
             if _record_date(row)[:4].isdigit()
@@ -98,6 +66,11 @@ class DailyReplay:
 
 def transfer_ids(client, gid: str) -> set[str]:
     rows = _recent_rows(client, gid, "bank_transfer")
+    return {_row_id(row) for row in rows if _row_id(row)}
+
+
+def transaction_ids(client, gid: str) -> set[str]:
+    rows = _recent_rows(client, gid, "transaction")
     return {_row_id(row) for row in rows if _row_id(row)}
 
 
@@ -141,26 +114,31 @@ def confirm_write(client, pending: dict, *, confirmed_absent: bool = False) -> d
 def _reconcile(client, pending: dict, *, allow_missing: bool = False) -> dict | None:
     kind, params = pending["kind"], pending["params"]
     gid = params["gid"]
-    missing = False
+    last_error: Exception | None = None
     for attempt in range(_ATTEMPTS):
         try:
             rows = _recent_rows(client, gid, kind)
-        except (OSError, XueqiuAPIError):
-            matches, missing = [], False
-        else:
-            matches = [row for row in rows if _matches(row, pending)]
-            missing = not matches
+        except (OSError, XueqiuAPIError) as exc:
+            last_error = exc
+            if attempt + 1 < _ATTEMPTS:
+                time.sleep(0.25 * (attempt + 1))
+                continue
+            break
+        matches = [row for row in rows if _matches(row, pending)]
         if len(matches) == 1:
             return {"result_code": client.SUCCESS_CODE, "result_data": matches[0], "reconciled": True}
         if len(matches) > 1:
             break
-        if attempt + 1 < _ATTEMPTS:
-            time.sleep(0.25 * (attempt + 1))
-    if allow_missing and missing:
-        return None
+        if allow_missing:
+            return None
+        # A valid, empty ledger response is authoritative for this request.
+        # Retrying it only repeats the same read and can delay the unresolved-write stop.
+        raise XueqiuAPIError(
+            f"Xueqiu {kind} for gid {gid} has an unknown outcome; check the ledger before retrying"
+        )
     raise XueqiuAPIError(
-        f"Xueqiu {kind} for gid {gid} has an unknown outcome; check the ledger before retrying"
-    )
+        f"Xueqiu {kind} for gid {gid} could not be reconciled after {_ATTEMPTS} reads"
+    ) from last_error
 
 
 def _recent_rows(client, gid: str, kind: str) -> list[dict]:
@@ -184,7 +162,20 @@ def _row_id(row: dict) -> str:
 def _matches(row: dict, pending: dict) -> bool:
     params = pending["params"]
     if pending["kind"] == "transaction":
-        return row.get("comment") == params["comment"] and bool(_row_id(row))
+        remote_id = _row_id(row)
+        if not remote_id or remote_id in pending.get("prior_ids", ()):
+            return False
+        try:
+            same_trade = (
+                _record_date(row) == params["date"]
+                and str(row.get("type")) == str(params["transaction_type"])
+                and from_xueqiu_symbol(row.get("symbol", "")) == from_xueqiu_symbol(params["symbol"])
+                and float(row.get("shares") or 0) == float(params["shares"])
+                and float(row.get("price") or 0) == float(params["price"])
+            )
+        except (TypeError, ValueError):
+            return False
+        return same_trade
     remote_id = _row_id(row)
     if not remote_id or remote_id in pending["prior_ids"]:
         return False

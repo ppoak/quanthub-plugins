@@ -105,12 +105,12 @@ class XueqiuLedger(BaseLedger):
 
     def reconstruct_cash(self, initial_cash, *, include_transfers: bool = False) -> Decimal:
         """Rebuild exact cash from remote transactions and optional transfers."""
-        cash = cash_amount(initial_cash)
+        cash = Decimal(str(initial_cash))
         transactions = self.execution_history(all_pages=True)
         transfers = self.transfer_executions(all_pages=True) if include_transfers else []
         for execution in sorted(transactions + transfers, key=lambda item: shanghai_time(item.datetime)):
-            cash = cash_amount(cash + Decimal(str(execution.cashflow)))
-        return cash
+            cash += Decimal(str(execution.cashflow))
+        return cash_amount(cash)
 
     def _history(self, fetch, key: str, row: int, pos, all_pages: bool) -> list[dict[str, Any]]:
         client = self._require_client()
@@ -171,9 +171,9 @@ class XueqiuLedger(BaseLedger):
             code=symbol,
             quantity=quantity,
             price=price,
-            comm=float(sum(fees.values())),
+            comm=sum(fees.values(), Decimal(0)),
             meta={"xueqiu_remote": item, "xueqiu_tid": str(execution_id),
-                  "fees": {name: float(amount) for name, amount in fees.items()}},
+                  "fees": dict(fees)},
         )
 
     def _require_client(self) -> Any:

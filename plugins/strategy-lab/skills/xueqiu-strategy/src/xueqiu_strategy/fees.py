@@ -4,7 +4,7 @@ from decimal import Decimal, ROUND_CEILING, ROUND_FLOOR
 from itertools import product
 
 from .errors import XueqiuAPIError
-from .utils import cash_amount, round_cash
+from .utils import cash_amount
 
 
 _PER_MILLE = Decimal(1000)
@@ -13,7 +13,7 @@ _FEE_FIELDS = ("commission", "tax")
 
 
 def fee_amount(value, rate, gross: Decimal, name: str) -> Decimal:
-    """Resolve a local fee in cents, preferring an explicit amount over a rate."""
+    """Resolve a local fee as an exact Decimal amount."""
     if value is None:
         rate = Decimal(str(rate))
         if not rate.is_finite() or rate < 0:
@@ -24,10 +24,10 @@ def fee_amount(value, rate, gross: Decimal, name: str) -> Decimal:
     amount = Decimal(str(value))
     if not amount.is_finite() or amount < 0:
         raise ValueError(f"Execution {name} must be finite and non-negative")
-    return cash_amount(amount)
+    return amount
 
 
-def wire_rates(gross: Decimal, amounts: dict, *, buy: bool, balance: Decimal, residual: Decimal) -> dict:
+def wire_rates(gross: Decimal, amounts: dict, *, buy: bool, balance: Decimal) -> dict:
     """Choose representable rates that minimize cumulative sub-cent cash drift."""
     net = -gross if buy else gross
     expected = cash_amount(balance + net - sum(amounts.values()))
@@ -35,13 +35,16 @@ def wire_rates(gross: Decimal, amounts: dict, *, buy: bool, balance: Decimal, re
     for name in _FEE_FIELDS:
         exact = amounts[name] * _PER_MILLE / gross
         rates = {exact.quantize(_RATE_TICK, rounding=mode) for mode in (ROUND_FLOOR, ROUND_CEILING)}
-        valid = sorted(rate for rate in rates if cash_amount(gross * rate / _PER_MILLE) == amounts[name])
+        valid = sorted(
+            rate for rate in rates
+            if cash_amount(gross * rate / _PER_MILLE) == cash_amount(amounts[name])
+        )
         if not valid:
             raise XueqiuAPIError(f"Xueqiu rate precision cannot represent {name} of {amounts[name]}")
         choices.append(valid)
 
     def remote_balance(pair):
-        return cash_amount(balance + residual + net - gross * sum(pair) / _PER_MILLE)
+        return cash_amount(balance + net - gross * sum(pair) / _PER_MILLE)
 
     pair = min(product(*choices), key=lambda rates: abs(remote_balance(rates) - expected))
     if remote_balance(pair) != expected:
@@ -62,7 +65,7 @@ def confirmed_fees(data, *, gross: Decimal, expected: dict, explicit: list[str],
         wire = gross * submitted_rate / _PER_MILLE
         amount = data.get(name)
         if amount is None:
-            if cash_amount(wire) != expected[name]:
+            if cash_amount(wire) != cash_amount(expected[name]):
                 raise XueqiuAPIError(f"Xueqiu {name} rate does not match the local fee")
             amounts[name] = expected[name]
         else:
@@ -72,7 +75,7 @@ def confirmed_fees(data, *, gross: Decimal, expected: dict, explicit: list[str],
                 raise XueqiuAPIError(f"Xueqiu confirmed {name} differs from the local fee")
             if reported_rate is None:
                 wire = confirmed
-            elif cash_amount(wire) != amounts[name]:
+            elif cash_amount(wire) != cash_amount(amounts[name]):
                 raise XueqiuAPIError(f"Xueqiu confirmed {name} and rate do not agree")
         wire_cost += wire
     return amounts, wire_cost

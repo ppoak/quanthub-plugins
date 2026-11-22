@@ -15,7 +15,7 @@ import numpy as np
 import pandas as pd
 
 from .models import XueqiuExecution, XueqiuOrder, XueqiuPosition
-from .utils import cash_amount, shanghai_time
+from .utils import shanghai_time
 
 __all__ = ["XueqiuStore", "to_excel"]
 
@@ -114,15 +114,7 @@ class XueqiuStore:
                 "CREATE TABLE IF NOT EXISTS pending_orders "
                 "(order_id TEXT PRIMARY KEY, position INTEGER NOT NULL, payload TEXT NOT NULL)"
             )
-            for order_id in self._pending_orders.keys() - current.keys():
-                db.execute("DELETE FROM pending_orders WHERE order_id = ?", (order_id,))
-            for order_id, (position, payload) in current.items():
-                if self._pending_orders.get(order_id) != (position, payload):
-                    db.execute(
-                        "INSERT INTO pending_orders VALUES (?, ?, ?) "
-                        "ON CONFLICT(order_id) DO UPDATE SET position=excluded.position, payload=excluded.payload",
-                        (order_id, position, payload),
-                    )
+            self._sync_pending_orders(db, current)
         self._pending_orders = current
 
     def _write(self, path: Path, data: dict, histories: dict[str, list], queue: list) -> None:
@@ -152,11 +144,29 @@ class XueqiuStore:
                 "INSERT INTO state VALUES (1, ?) ON CONFLICT(id) DO UPDATE SET payload=excluded.payload "
                 "WHERE state.payload != excluded.payload", (_dumps(data),),
             )
-            db.execute("DELETE FROM pending_orders")
-            db.executemany(
-                "INSERT INTO pending_orders VALUES (?, ?, ?)",
-                ((order.order_id, position, _dumps(order)) for position, order in enumerate(queue)),
+            current = {
+                order.order_id: (position, _dumps(order))
+                for position, order in enumerate(queue)
+            }
+            self._sync_pending_orders(db, current)
+
+    def _sync_pending_orders(self, db, current: dict[str, tuple[int, str]]) -> None:
+        """Apply only the queue rows that changed since the last checkpoint."""
+        stored = {
+            order_id: (position, payload)
+            for order_id, position, payload in db.execute(
+                "SELECT order_id, position, payload FROM pending_orders"
             )
+        }
+        for order_id in stored.keys() - current.keys():
+            db.execute("DELETE FROM pending_orders WHERE order_id = ?", (order_id,))
+        for order_id, (position, payload) in current.items():
+            if stored.get(order_id) != (position, payload):
+                db.execute(
+                    "INSERT INTO pending_orders VALUES (?, ?, ?) "
+                    "ON CONFLICT(order_id) DO UPDATE SET position=excluded.position, payload=excluded.payload",
+                    (order_id, position, payload),
+                )
 
 
 def _dumps(value) -> str:
@@ -166,7 +176,7 @@ def _dumps(value) -> str:
 def restore_execution(data: dict) -> XueqiuExecution:
     restored = dict(data, datetime=_timestamp(data["datetime"]))
     if "comm" in restored:
-        restored["comm"] = cash_amount(restored["comm"])
+        restored["comm"] = Decimal(str(restored["comm"]))
     return XueqiuExecution(**restored)
 
 
@@ -179,7 +189,7 @@ def restore_order(data: dict) -> XueqiuOrder:
 
 def restore_position(data: dict) -> XueqiuPosition:
     restored = dict(data, executions=[restore_execution(item) for item in data["executions"]])
-    restored["realized_pnl_value"] = cash_amount(restored.get("realized_pnl_value", 0))
+    restored["realized_pnl_value"] = Decimal(str(restored.get("realized_pnl_value", 0)))
     return XueqiuPosition(**restored)
 
 

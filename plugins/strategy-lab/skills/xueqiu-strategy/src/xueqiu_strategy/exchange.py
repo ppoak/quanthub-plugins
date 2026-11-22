@@ -16,9 +16,9 @@ from .errors import XueqiuAPIError
 from .fees import confirmed_fees, fee_amount, wire_rates
 from .ledger import XueqiuLedger
 from .models import XueqiuExecution as Execution, XueqiuOrder as Order
-from .remote import DailyReplay, confirm_write, transfer_ids
+from .remote import DailyReplay, confirm_write, transaction_ids, transfer_ids
 from .stores import XueqiuStore, restore_execution, restore_order, restore_position
-from .utils import buy_amount, cash_amount, round_cash, shanghai_time, to_xueqiu_symbol
+from .utils import buy_amount, cash_amount, shanghai_time, to_xueqiu_symbol
 
 
 class XueqiuExchange(BaseExchange):
@@ -40,7 +40,6 @@ class XueqiuExchange(BaseExchange):
         self.sync_transactions = bool(sync_transactions)
         self.commission = commission
         self.tax = tax
-        self._cash_residual = Decimal(0)
         self._order_queue: deque[Order] = deque()
         self._order_map: dict[str, Order] = {}
         self._last_orders: list[Order] = []
@@ -75,12 +74,44 @@ class XueqiuExchange(BaseExchange):
             self._restore(state)
         if first_registration and self.sync_transactions:
             history = XueqiuLedger(client=self.client, gid=self.gid)
-            if state is None:
+            if state is None and self.store is None:
                 account.cash = history.reconstruct_cash(account.init_cash)
             if self.store is not None:
+                if state is None:
+                    account.cash = account.init_cash
                 scope = (str(self.store.path.resolve()), self.gid, account.account_id)
                 self._replay = DailyReplay(history, scope, self.last_completed_bar)
+                self._recover_remote_transactions(history)
                 self._recover_remote_transfers()
+
+    def _recover_remote_transactions(self, history: XueqiuLedger) -> None:
+        """Import remote transactions absent from the saved local ledger."""
+        known = {
+            str(item.meta.get("xueqiu_tid"))
+            for item in self._ledger.executions
+            if item.meta.get("xueqiu_tid")
+        }
+        remote = sorted(
+            history.execution_history(all_pages=True),
+            key=lambda item: shanghai_time(item.datetime),
+        )
+        for execution in remote:
+            remote_id = str(execution.meta.get("xueqiu_tid") or execution.execution_id)
+            if remote_id in known:
+                continue
+            pending = self._pending_write
+            if pending is not None and pending["kind"] == "transaction" \
+                    and self._matches_remote_transaction(execution, pending):
+                data = execution.meta.get("xueqiu_remote") or {}
+                pending["confirmed_result"] = {
+                    "result_code": self.client.SUCCESS_CODE,
+                    "result_data": data,
+                    "reconciled": True,
+                }
+                self.recover_pending()
+            else:
+                self._settle_execution(execution)
+            known.add(remote_id)
 
     def _recover_remote_transfers(self) -> None:
         """Apply remote transfers absent from the saved local ledger."""
@@ -89,7 +120,27 @@ class XueqiuExchange(BaseExchange):
             for item in self._ledger.executions
             if item.meta.get("xueqiu_tid")
         }
-        for execution in self._ledger.transfer_executions(all_pages=True):
+        remote = sorted(
+            self._ledger.transfer_executions(all_pages=True),
+            key=lambda item: shanghai_time(item.datetime),
+        )
+        pending = self._pending_write
+        if pending is not None and pending["kind"] == "bank_transfer":
+            for execution in remote:
+                if self._matches_remote_transfer(execution, pending):
+                    data = execution.meta.get("xueqiu_remote") or {}
+                    pending["confirmed_result"] = {
+                        "result_code": self.client.SUCCESS_CODE,
+                        "result_data": data,
+                        "reconciled": True,
+                    }
+                    self.recover_pending()
+                    known.add(str(execution.meta.get("xueqiu_tid") or execution.execution_id))
+                    break
+        for execution in remote:
+            remote_id = str(execution.meta.get("xueqiu_tid") or execution.execution_id)
+            if remote_id in known:
+                continue
             if execution.execution_id in known:
                 continue
             self._settle_execution(execution)
@@ -97,6 +148,34 @@ class XueqiuExchange(BaseExchange):
                 self._replay.remember_restored_transfer(
                     {"result_data": execution.meta.get("xueqiu_remote", {})}
                 )
+
+    @staticmethod
+    def _matches_remote_transaction(execution: Execution, pending: dict) -> bool:
+        params = pending["params"]
+        remote = execution.meta.get("xueqiu_remote") or {}
+        remote_id = str(execution.meta.get("xueqiu_tid") or execution.execution_id)
+        if remote_id in pending.get("prior_ids", ()):
+            return False
+        return (
+            str(shanghai_time(execution.datetime).date()) == params["date"]
+            and str(remote.get("type")) == str(params["transaction_type"])
+            and to_xueqiu_symbol(execution.code) == params["symbol"]
+            and float(execution.quantity) == float(params["shares"])
+            and float(execution.price) == float(params["price"])
+        )
+
+    @staticmethod
+    def _matches_remote_transfer(execution: Execution, pending: dict) -> bool:
+        params = pending["params"]
+        remote = execution.meta.get("xueqiu_remote") or {}
+        return (
+            str(shanghai_time(execution.datetime).date()) == params["date"]
+            and str(remote.get("type")) == str(params["transfer_type"])
+            and (remote.get("market") is None or remote.get("market") == params["market"])
+            and cash_amount(execution.quantity) == cash_amount(params["amount"])
+            and str(execution.meta.get("xueqiu_tid") or execution.execution_id)
+                not in pending.get("prior_ids", ())
+        )
 
     def _known_transfer(self, timestamp: pd.Timestamp, amount: Decimal) -> Execution | None:
         for execution in self._ledger.executions:
@@ -121,7 +200,7 @@ class XueqiuExchange(BaseExchange):
             "queue": self.order_queue, "last_orders": [order.order_id for order in self._last_orders],
             "last_executions": [item.execution_id for item in self._last_executions],
             "active_bar": self._active_bar, "pending_write": self._pending_write,
-            "last_completed_bar": timestamp, "nav": nav, "cash_residual": str(self._cash_residual),
+            "last_completed_bar": timestamp, "nav": nav,
         })
 
     def _save_failure(self) -> None:
@@ -135,7 +214,6 @@ class XueqiuExchange(BaseExchange):
             "last_executions": [item.execution_id for item in self._last_executions],
             "active_bar": self._active_bar, "pending_write": self._pending_write,
             "last_completed_bar": self.last_completed_bar, "nav": account.net_asset_value,
-            "cash_residual": str(self._cash_residual),
         })
 
     def _update_pending_orders(self) -> None:
@@ -159,7 +237,6 @@ class XueqiuExchange(BaseExchange):
         self._active_bar = pd.Timestamp(state["active_bar"]) if state.get("active_bar") else None
         self.last_completed_bar = pd.Timestamp(state["last_completed_bar"]) if state["last_completed_bar"] else None
         self._daily_checkpoint = "nav" in state
-        self._cash_residual = Decimal(state.get("cash_residual", "0"))
         self._pending_write = state.get("pending_write")
         if self._pending_write is not None:
             pending = self._pending_write
@@ -256,12 +333,13 @@ class XueqiuExchange(BaseExchange):
                           date=str(trade_dt.date()), market="CHA", amount=abs(amount))
             self._pending_write = {
                 "kind": "bank_transfer", "params": params, "execution": execution,
-                "prior_ids": sorted(transfer_ids(self.client, self.gid)), "in_flight": False,
+                "prior_ids": sorted(self._remote_ids(transfer_ids)), "in_flight": False,
                 "replay": self._replay is not None,
             }
             self.recover_pending()
         else:
             self._settle_execution(execution)
+        self._normalize_cash()
         return execution
 
     def advance(
@@ -310,6 +388,8 @@ class XueqiuExchange(BaseExchange):
             completed = True
         finally:
             account.update_prices(bar["close"] if "close" in bar.columns else {})
+            if is_close or not completed:
+                self._normalize_cash()
             if not completed and self.store is not None:
                 self._save_failure()
         if is_close:
@@ -418,6 +498,8 @@ class XueqiuExchange(BaseExchange):
         self._last_orders.append(order)
         self._settle_execution(execution)
         self.record_order(order)
+        if self._active_bar is None:
+            self._normalize_cash()
 
     def _require_open_day(self, timestamp: pd.Timestamp) -> None:
         last_close = self.last_completed_bar
@@ -432,6 +514,15 @@ class XueqiuExchange(BaseExchange):
         if self._pending_write is not None:
             raise XueqiuAPIError("Recover the pending Xueqiu write before submitting another action")
 
+    def _normalize_cash(self) -> None:
+        self.account().cash = cash_amount(self.account().cash)
+
+    def _remote_ids(self, loader) -> set[str]:
+        try:
+            return loader(self.client, self.gid)
+        except (OSError, XueqiuAPIError):
+            return set()
+
     def recover_pending(self, *, confirmed_absent: bool = False) -> Execution | None:
         """Resolve a pending write. Set confirmed_absent only after checking the remote ledger."""
         pending = self._pending_write
@@ -439,7 +530,7 @@ class XueqiuExchange(BaseExchange):
             return None
         execution = pending["execution"]
         result = pending.get("confirmed_result")
-        if result is None and pending.get("replay"):
+        if result is None and pending.get("replay") and pending["kind"] == "bank_transfer":
             row = self._replay.find(pending)
             if row is not None:
                 result = {"result_code": self.client.SUCCESS_CODE, "result_data": row, "reconciled": True}
@@ -468,8 +559,14 @@ class XueqiuExchange(BaseExchange):
             order.meta["xueqiu_response"] = result
             self._finish_fill(order, execution)
         else:
-            if self._replay is not None and "replay" not in pending:
+            if self._replay is not None:
                 self._replay.remember_restored_transfer(result)
+            data = result.get("result_data") or {}
+            tid = None
+            if isinstance(data, dict):
+                tid = data.get("tid") or data.get("id")
+            if tid:
+                execution.meta["xueqiu_tid"] = str(tid)
             self._settle_execution(execution)
         self._pending_write = None
         return execution
@@ -484,12 +581,11 @@ class XueqiuExchange(BaseExchange):
         )
         net = -gross if buy else gross
         local_balance = cash_amount(balance + net - sum(fees.values(), Decimal(0)))
-        remote_balance = balance + self._cash_residual + net - wire_cost
+        remote_balance = balance + net - wire_cost
         if (buy and local_balance < 0) or cash_amount(remote_balance) != local_balance:
             raise XueqiuAPIError("Confirmed Xueqiu fees do not preserve the local cash balance")
         execution.comm = sum(fees.values(), Decimal(0))
         execution.meta["fees"] = dict(fees)
-        self._cash_residual = remote_balance - local_balance
 
     def sync_execution(
         self, order: Order, execution: Execution, *,
@@ -513,7 +609,6 @@ class XueqiuExchange(BaseExchange):
         rates = wire_rates(
             gross, {name: Decimal(str(value)) for name, value in execution.meta["fees"].items()},
             buy=execution.side == Execution.BUY, balance=self.account().cash,
-            residual=self._cash_residual,
         )
         trade_dt = shanghai_time(execution.datetime)
         self._require_open_day(trade_dt)
@@ -533,6 +628,7 @@ class XueqiuExchange(BaseExchange):
             "kind": "transaction", "params": params, "execution": execution,
             "order_id": order.order_id, "in_flight": False, "verify_fees": True,
             "replay": self._replay is not None,
+            "prior_ids": sorted(self._remote_ids(transaction_ids)),
         }
         self.recover_pending()
         return execution.meta["xueqiu_response"]

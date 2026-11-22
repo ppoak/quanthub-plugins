@@ -166,7 +166,7 @@ def evaluate_asset_value(
         return pd.Series(metrics, name="metrics")
 
     actual_nav = pd.to_numeric(asset_value["nav"], errors="coerce").astype(float)
-    final_nav = float(actual_nav.iloc[-1]) if pd.notna(actual_nav.iloc[-1]) else float("nan")
+    final_nav = float("nan")
     flow = (
         pd.to_numeric(asset_value["external_flow"], errors="coerce").fillna(0.0)
         if "external_flow" in asset_value
@@ -201,14 +201,13 @@ def evaluate_asset_value(
             period_returns.append((previous_nav - first_late_flow - capital) / capital)
             period_index.append(actual_nav.index[first_location])
 
-    stop_location = len(valid_locations)
+    end_location = first_location
     for current_position in range(1, len(valid_locations)):
         current_location = int(valid_locations[current_position])
         gap = actual_nav.iloc[previous_location + 1 : current_location].isna().any()
         interval_flow = float(flow.iloc[previous_location + 1 : current_location + 1].sum())
         current_late_flow = float(late_flow.iloc[current_location])
         if gap and abs(interval_flow) > 0:
-            stop_location = current_position
             break
         capital = previous_nav + interval_flow - current_late_flow
         current_nav = float(actual_nav.iloc[current_location])
@@ -217,9 +216,17 @@ def evaluate_asset_value(
             period_index.append(actual_nav.index[current_location])
         previous_location = current_location
         previous_nav = current_nav
+        end_location = current_location
+
+    if len(valid_locations) == 1:
+        end_location = first_location
+    final_nav = float(actual_nav.iloc[end_location])
 
     returns = pd.Series(period_returns, index=pd.Index(period_index, name=actual_nav.index.name), dtype=float)
     init_cash = baseline
+    if not len(returns):
+        metrics.update({"init_cash": init_cash, "final_nav": final_nav})
+        return pd.Series(metrics, name="metrics")
     growth = float((1.0 + returns).prod()) if len(returns) else 1.0
     total_return = growth - 1.0
     performance_index = returns.index
@@ -338,6 +345,8 @@ def _empty_metrics() -> dict[str, Any]:
 
 
 def _benchmark_returns(benchmark: pd.Series | None, index: pd.Index) -> pd.Series:
+    if len(index) < 2:
+        return pd.Series(dtype=float, index=index[1:])
     if benchmark is None or benchmark.empty:
         return pd.Series(np.zeros(len(index) - 1), index=index[1:])
     bm = benchmark.reindex(index).ffill().fillna(1.0)

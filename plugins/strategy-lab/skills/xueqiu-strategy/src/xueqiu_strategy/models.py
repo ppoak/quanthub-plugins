@@ -7,7 +7,7 @@ from decimal import Decimal
 from typing import Any
 from uuid import uuid4
 
-from .utils import cash_amount, round_cash, shanghai_time, trade_amount
+from .utils import round_cash, shanghai_time, trade_amount
 
 
 @dataclass
@@ -42,7 +42,7 @@ class XueqiuExecution:
         side = str(self.side).upper()
         if side in {self.BUY, self.SELL}:
             return trade_amount(self.price, self.quantity, self.comm, buy=side == self.BUY)
-        amount = cash_amount(Decimal(str(self.quantity)) * Decimal(str(self.price)))
+        amount = Decimal(str(self.quantity)) * Decimal(str(self.price))
         return -amount if side == self.WITHDRAW else amount
 
     @classmethod

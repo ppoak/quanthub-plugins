@@ -45,7 +45,7 @@ class XueqiuAccount(BaseAccount):
     def apply_execution(self, execution: XueqiuExecution) -> None:
         if execution.side in {XueqiuExecution.BUY, XueqiuExecution.SELL}:
             self.position(execution.code).apply_execution(execution)
-        self.cash = cash_amount(self.cash + Decimal(str(execution.cashflow)))
+        self.cash = Decimal(str(self.cash)) + Decimal(str(execution.cashflow))
 
     def update_prices(self, prices) -> None:
         """Mark existing positions from a code-to-price mapping."""
