@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import math
+from copy import deepcopy
 from collections import deque
 from decimal import Decimal
 from typing import Any
@@ -79,8 +80,7 @@ class XueqiuExchange(BaseExchange):
             if self.store is not None:
                 if state is None:
                     account.cash = account.init_cash
-                scope = (str(self.store.path.resolve()), self.gid, account.account_id)
-                self._replay = DailyReplay(history, scope, self.last_completed_bar)
+                self._replay = DailyReplay(history, self.last_completed_bar)
                 self._recover_remote_transactions(history)
                 self._recover_remote_transfers()
 
@@ -177,48 +177,100 @@ class XueqiuExchange(BaseExchange):
                 not in pending.get("prior_ids", ())
         )
 
-    def _known_transfer(self, timestamp: pd.Timestamp, amount: Decimal) -> Execution | None:
-        for execution in self._ledger.executions:
-            if execution.code != "CASH" or not execution.meta.get("xueqiu_tid"):
-                continue
-            if shanghai_time(execution.datetime).date() == timestamp.date() \
-                    and Decimal(str(execution.quantity)) == amount:
-                return execution
-        return None
-
     @property
     def interrupted_bar(self) -> pd.Timestamp | None:
         """Return the unfinished bar in memory, including one restored from an older file."""
         return self._active_bar
 
     def _save_close(self, timestamp: pd.Timestamp, nav: float) -> None:
-        account = self.account()
-        self.store.save({
-            "gid": self.gid, "account_id": account.account_id, "sync_transactions": self.sync_transactions,
-            "init_cash": account.init_cash, "cash": account.cash, "positions": account.positions,
-            "orders": self._ledger.orders, "executions": self._ledger.executions,
-            "queue": self.order_queue, "last_orders": [order.order_id for order in self._last_orders],
-            "last_executions": [item.execution_id for item in self._last_executions],
-            "active_bar": self._active_bar, "pending_write": self._pending_write,
-            "last_completed_bar": timestamp, "nav": nav,
-        })
+        self._commit_state(last_completed_bar=timestamp, nav=nav)
 
     def _save_failure(self) -> None:
         """Persist a failed bar and its unresolved remote write."""
+        self._commit_state(
+            last_completed_bar=self.last_completed_bar,
+            nav=self.account().net_asset_value,
+        )
+
+    def _commit_state(self, *, last_completed_bar, nav) -> None:
+        if self.store is None:
+            return
         account = self.account()
-        self.store.save({
+        self.store.commit({
             "gid": self.gid, "account_id": account.account_id, "sync_transactions": self.sync_transactions,
             "init_cash": account.init_cash, "cash": account.cash, "positions": account.positions,
             "orders": self._ledger.orders, "executions": self._ledger.executions,
             "queue": self.order_queue, "last_orders": [order.order_id for order in self._last_orders],
             "last_executions": [item.execution_id for item in self._last_executions],
             "active_bar": self._active_bar, "pending_write": self._pending_write,
-            "last_completed_bar": self.last_completed_bar, "nav": account.net_asset_value,
+            "last_completed_bar": last_completed_bar, "nav": nav,
         })
 
-    def _update_pending_orders(self) -> None:
-        if self.store is not None:
-            self.store.update_pending_orders(self.order_queue)
+    def _commit_current_state(self) -> None:
+        self._commit_state(
+            last_completed_bar=self.last_completed_bar,
+            nav=self.account().net_asset_value,
+        )
+
+    def _commit_mutation(self, mutation) -> None:
+        snapshot = self._runtime_snapshot()
+        try:
+            mutation()
+            self._commit_current_state()
+        except Exception:
+            self._restore_runtime(snapshot)
+            raise
+
+    def _runtime_snapshot(self) -> dict:
+        objects = []
+        seen = set()
+        for item in [
+            *self._order_queue, *self._ledger.orders, *self._ledger.executions,
+            *self._last_orders, *self._last_executions,
+        ]:
+            if id(item) not in seen:
+                objects.append((item, deepcopy(vars(item))))
+                seen.add(id(item))
+        return {
+            "cash": self.account().cash,
+            "positions": {
+                code: (position, deepcopy(vars(position)))
+                for code, position in self.account().positions.items()
+            },
+            "orders": list(self._ledger.orders),
+            "executions": list(self._ledger.executions),
+            "queue": list(self._order_queue),
+            "order_map": dict(self._order_map),
+            "last_orders": list(self._last_orders),
+            "last_executions": list(self._last_executions),
+            "active_bar": self._active_bar,
+            "last_completed_bar": self.last_completed_bar,
+            "daily_checkpoint": self._daily_checkpoint,
+            "pending_write": deepcopy(self._pending_write),
+            "objects": objects,
+        }
+
+    def _restore_runtime(self, snapshot: dict) -> None:
+        self.account().cash = snapshot["cash"]
+        positions = {}
+        for code, (position, values) in snapshot["positions"].items():
+            vars(position).clear()
+            vars(position).update(deepcopy(values))
+            positions[code] = position
+        self.account().positions = positions
+        self._ledger.orders = snapshot["orders"]
+        self._ledger.executions = snapshot["executions"]
+        self._order_queue = deque(snapshot["queue"])
+        self._order_map = snapshot["order_map"]
+        self._last_orders = snapshot["last_orders"]
+        self._last_executions = snapshot["last_executions"]
+        self._active_bar = snapshot["active_bar"]
+        self.last_completed_bar = snapshot["last_completed_bar"]
+        self._daily_checkpoint = snapshot["daily_checkpoint"]
+        self._pending_write = snapshot["pending_write"]
+        for item, values in snapshot["objects"]:
+            vars(item).clear()
+            vars(item).update(deepcopy(values))
 
     def _restore(self, state: dict) -> None:
         account = self.account()
@@ -267,16 +319,20 @@ class XueqiuExchange(BaseExchange):
         self._require_no_pending()
         if order.account_id != self.account().account_id:
             raise ValueError("Order account_id does not match the registered account")
-        order.status = Order.ACCEPTED
-        self._order_queue.append(order)
-        self._order_map[order.order_id] = order
-        self._update_pending_orders()
+        def accept():
+            order.status = Order.ACCEPTED
+            self._order_queue.append(order)
+            self._order_map[order.order_id] = order
+        self._commit_mutation(accept)
         return order
 
-    def record_order(self, order: Order) -> None:
+    def record_order(self, order: Order, *, persist: bool = True) -> None:
         """Record a terminal local order."""
         self.account()
-        self._ledger.record_order(order)
+        if persist:
+            self._commit_mutation(lambda: self._ledger.record_order(order))
+        else:
+            self._ledger.record_order(order)
 
     def cancel(self, order_or_id: Order | str, **kwargs: Any) -> Order:
         """Cancel a pending local order and record its terminal status."""
@@ -284,10 +340,11 @@ class XueqiuExchange(BaseExchange):
         order = self._order_map[order_or_id] if isinstance(order_or_id, str) else order_or_id
         if order.account_id != self.account().account_id:
             raise ValueError("Order account_id does not match the registered account")
-        order.cancel()
-        self._remove_order(order)
-        self.record_order(order)
-        self._update_pending_orders()
+        def cancel_order():
+            order.cancel()
+            self._remove_order(order)
+            self.record_order(order, persist=False)
+        self._commit_mutation(cancel_order)
         return order
 
     def executions(self, **kwargs: Any) -> list[Execution]:
@@ -314,12 +371,6 @@ class XueqiuExchange(BaseExchange):
             raise ValueError("Transfer exceeds available cash")
         trade_dt = shanghai_time(trade_time)
         self._require_open_day(trade_dt)
-        if self.sync_transactions:
-            existing = self._known_transfer(trade_dt, amount)
-            if existing is not None:
-                self._last_orders = []
-                self._last_executions = [existing]
-                return existing
         execution = Execution(
             execution_id=Execution._auto_id("xueqiu-transfer"),
             account_id=account.account_id, datetime=trade_dt,
@@ -338,8 +389,10 @@ class XueqiuExchange(BaseExchange):
             }
             self.recover_pending()
         else:
-            self._settle_execution(execution)
-        self._normalize_cash()
+            def settle():
+                self._settle_execution(execution)
+                self._normalize_cash()
+            self._commit_mutation(settle)
         return execution
 
     def advance(
@@ -360,6 +413,7 @@ class XueqiuExchange(BaseExchange):
             self._active_bar = bar_dt
             self._last_orders = []
             self._last_executions = []
+        checkpoint_snapshot = self._runtime_snapshot() if self.store is not None and is_close else None
         available_quantity = available_quantity or account.available_quantity
         completed = False
         try:
@@ -382,7 +436,7 @@ class XueqiuExchange(BaseExchange):
                     order.status = Order.MARGIN
                     self._remove_order(order)
                     self._last_orders.append(order)
-                    self.record_order(order)
+                    self.record_order(order, persist=False)
                     continue
                 self._record_fill(order, bar_dt, fill_px, *fees)
             completed = True
@@ -395,9 +449,14 @@ class XueqiuExchange(BaseExchange):
         if is_close:
             nav = account.net_asset_value
             if self.store is not None:
-                if self._replay is not None:
-                    self._replay.check_close(str(bar_dt.date()))
-                self._save_close(bar_dt, nav)
+                try:
+                    if self._replay is not None:
+                        self._replay.check_close(str(bar_dt.date()))
+                    self._save_close(bar_dt, nav)
+                except Exception:
+                    if checkpoint_snapshot is not None:
+                        self._restore_runtime(checkpoint_snapshot)
+                    raise
                 self._daily_checkpoint = True
             self.last_completed_bar = bar_dt
         self._active_bar = None
@@ -489,7 +548,13 @@ class XueqiuExchange(BaseExchange):
         if self.sync_transactions:
             self.sync_execution(order, execution)
         else:
-            self._finish_fill(order, execution)
+            def settle():
+                self._finish_fill(order, execution)
+                self._normalize_cash()
+            if self._active_bar is None:
+                self._commit_mutation(settle)
+            else:
+                settle()
         return execution
 
     def _finish_fill(self, order: Order, execution: Execution) -> None:
@@ -497,9 +562,7 @@ class XueqiuExchange(BaseExchange):
         self._remove_order(order)
         self._last_orders.append(order)
         self._settle_execution(execution)
-        self.record_order(order)
-        if self._active_bar is None:
-            self._normalize_cash()
+        self.record_order(order, persist=False)
 
     def _require_open_day(self, timestamp: pd.Timestamp) -> None:
         last_close = self.last_completed_bar
@@ -557,7 +620,8 @@ class XueqiuExchange(BaseExchange):
             if tid:
                 execution.meta["xueqiu_tid"] = str(tid)
             order.meta["xueqiu_response"] = result
-            self._finish_fill(order, execution)
+            def settle():
+                self._finish_fill(order, execution)
         else:
             if self._replay is not None:
                 self._replay.remember_restored_transfer(result)
@@ -567,8 +631,17 @@ class XueqiuExchange(BaseExchange):
                 tid = data.get("tid") or data.get("id")
             if tid:
                 execution.meta["xueqiu_tid"] = str(tid)
-            self._settle_execution(execution)
-        self._pending_write = None
+            def settle():
+                self._settle_execution(execution)
+        if self._active_bar is None:
+            def settle_and_clear():
+                settle()
+                self._pending_write = None
+                self._normalize_cash()
+            self._commit_mutation(settle_and_clear)
+        else:
+            settle()
+            self._pending_write = None
         return execution
 
     def _confirm_fees(self, execution: Execution, data: dict, params: dict) -> None:
@@ -612,17 +685,10 @@ class XueqiuExchange(BaseExchange):
         )
         trade_dt = shanghai_time(execution.datetime)
         self._require_open_day(trade_dt)
-        date = str(trade_dt.date())
-        comment = str(order.meta.get("comment", ""))
-        execution.meta["xueqiu_comment"] = (
-            self._replay.trade_comment(date, comment) if self._replay is not None
-            else f"{comment} [ql:{execution.execution_id.split('#')[-1]}]".strip()
-        )
         params = dict(
             gid=self.gid, symbol=to_xueqiu_symbol(execution.code), shares=int(execution.quantity),
             transaction_type=self.BUY_TRANSACTION if execution.side == Execution.BUY else self.SELL_TRANSACTION,
-            date=date, price=execution.price,
-            comment=execution.meta["xueqiu_comment"], **rates,
+            date=str(trade_dt.date()), price=execution.price, **rates,
         )
         self._pending_write = {
             "kind": "transaction", "params": params, "execution": execution,
@@ -636,4 +702,3 @@ class XueqiuExchange(BaseExchange):
     def _remove_order(self, order: Order) -> None:
         self._order_queue = deque(item for item in self._order_queue if item is not order)
         self._order_map.pop(order.order_id, None)
-        self._update_pending_orders()

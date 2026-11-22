@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import time
-from hashlib import sha256
 
 import pandas as pd
 
@@ -17,16 +16,10 @@ _ATTEMPTS = 3
 class DailyReplay:
     """Identify remote writes when rebuilding a day from the previous close."""
 
-    def __init__(self, ledger, scope: tuple, last_close: pd.Timestamp | None) -> None:
+    def __init__(self, ledger, last_close: pd.Timestamp | None) -> None:
         self._ledger = ledger
-        self._prefix = f"[ql:{sha256(repr(scope).encode()).hexdigest()[:20]}/"
-        self._sequence: dict[str, int] = {}
         self._transfers: list[dict] | None = None
         self._last_close = str(last_close.date()) if last_close is not None else None
-
-    def trade_comment(self, day: str, comment: str) -> str:
-        sequence = self._sequence[day] = self._sequence.get(day, 0) + 1
-        return f"{comment} {self._prefix}{day}/{sequence}]".strip()
 
     def find(self, pending: dict) -> dict | None:
         params = pending["params"]
@@ -61,7 +54,6 @@ class DailyReplay:
             if _record_date(row)[:4].isdigit()
         ):
             raise XueqiuAPIError("Replay left Xueqiu transfers unsettled before the daily close")
-        self._sequence.pop(day, None)
 
 
 def transfer_ids(client, gid: str) -> set[str]:

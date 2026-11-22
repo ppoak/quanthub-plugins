@@ -297,24 +297,22 @@ class XueqiuClient(BaseClient):
         price: float,
         tax_rate: float = 0.0,
         commission_rate: float = 0.0,
-        comment: str = "",
+        comment: str | None = None,
     ) -> dict[str, Any]:
         """Submit a simulated stock transaction to Xueqiu."""
-        return self.request(
-            "POST",
-            "transaction/add.json",
-            data={
-                "gid": gid,
-                "symbol": symbol,
-                "shares": shares,
-                "type": transaction_type,
-                "date": date,
-                "price": price,
-                "tax_rate": tax_rate,
-                "commission_rate": commission_rate,
-                "comment": comment,
-            },
-        )
+        data = {
+            "gid": gid,
+            "symbol": symbol,
+            "shares": shares,
+            "type": transaction_type,
+            "date": date,
+            "price": price,
+            "tax_rate": tax_rate,
+            "commission_rate": commission_rate,
+        }
+        if comment is not None:
+            data["comment"] = comment
+        return self.request("POST", "transaction/add.json", data=data)
 
     def transaction_records(self, gid: str, row: int = 50, *, pos: int | str | None = None) -> dict[str, Any]:
         """Return raw transaction records for an investment group."""
