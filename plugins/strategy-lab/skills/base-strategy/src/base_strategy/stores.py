@@ -66,7 +66,7 @@ def _order_row(order: Any) -> dict[str, Any]:
         "order_id": _first_attr(order, "order_id", "oid"),
         "account_id": _first_attr(order, "account_id"),
         "client_id": _first_attr(order, "client_id"),
-        "created_at": _first_attr(order, "created_at"),
+        "created_at": _excel_timestamp(_first_attr(order, "created_at")),
         "code": _first_attr(order, "code"),
         "side": _first_attr(order, "side"),
         "quantity": _first_attr(order, "quantity"),
@@ -87,7 +87,7 @@ def _execution_row(execution: Any) -> dict[str, Any]:
         "order_id": _first_attr(execution, "order_id"),
         "account_id": _first_attr(execution, "account_id"),
         "client_id": _first_attr(execution, "client_id"),
-        "timestamp": _first_attr(execution, "timestamp", "datetime"),
+        "timestamp": _excel_timestamp(_first_attr(execution, "timestamp", "datetime")),
         "code": _first_attr(execution, "code"),
         "side": _first_attr(execution, "side"),
         "quantity": _first_attr(execution, "quantity"),
@@ -96,6 +96,13 @@ def _execution_row(execution: Any) -> dict[str, Any]:
         "source": _first_attr(execution, "source"),
         "meta": _first_attr(execution, "meta"),
     }
+
+
+
+def _excel_timestamp(value: Any) -> Any:
+    if getattr(value, "tzinfo", None) is not None:
+        return pd.Timestamp(value).tz_localize(None)
+    return value
 
 
 _MISSING = object()

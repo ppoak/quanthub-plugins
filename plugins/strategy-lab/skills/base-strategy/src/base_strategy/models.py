@@ -51,10 +51,13 @@ class Execution:
     @property
     def cashflow(self) -> float:
         """Signed cash movement represented by this execution."""
-        if self.side == "BUY":
+        side = str(self.side).upper()
+        if side == "BUY":
             return -(self.price * self.quantity + self.comm)
-        if self.side == "SELL":
+        if side == "SELL":
             return self.price * self.quantity - self.comm
+        if side in {"WITHDRAW", "WITHDRAWAL"}:
+            return -(self.price * self.quantity)
         return self.price * self.quantity
 
 
