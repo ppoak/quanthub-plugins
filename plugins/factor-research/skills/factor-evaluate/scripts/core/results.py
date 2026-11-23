@@ -277,11 +277,22 @@ class _EvaluationResultsMixin:
             len(self.quote_dates) - 1,
         )
         quote_through = self.quote_dates[quote_index]
+        # Correlations use signal-date exposures only when the exit falls
+        # within the same evaluation period (as in the forward-return SQL).
+        holding_window = self.cfg.execution_lag_days + self.cfg.horizon_days
+        reference_through = "0001-01-01"  # Empty prefix if no signal has matured.
+        for signal in reversed(self.signal_dates):
+            exit_index = self._calendar_index[signal] + holding_window
+            period_end = next(end for end in (self.cfg.train_end, self.cfg.validation_end, self.end)
+                              if signal <= end)
+            if exit_index <= last_signal_index and self.quote_dates[exit_index] <= period_end:
+                reference_through = signal
+                break
         references: dict[str, Any] = {}
         for value in self.reference_factors:
             table = FactorPath.parse(value).table
             references[table] = manifest_reference(
-                self._manifest(table, last_signal_date)
+                self._manifest(table, reference_through)
             )
         return {
             "factor": manifest_reference(
