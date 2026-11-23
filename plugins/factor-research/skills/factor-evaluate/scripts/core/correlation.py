@@ -242,6 +242,15 @@ class _CorrelationMixin:
             block_begin=block_begin,
             block_end=block_end,
         )
+        # Include checked dates even when the correlation has too few pairs.
+        for column, day in self.storage.execute(
+            "SELECT factor_column, MAX(date) FROM _ranked_positions "
+            "WHERE date BETWEEN CAST(? AS DATE) AND CAST(? AS DATE) GROUP BY factor_column",
+            [block_begin, block_end],
+        ).fetchall():
+            self._correlation_through[column] = max(
+                self._correlation_through.get(column, ""), day.isoformat()
+            )
 
 
     def _insert_correlations_from(

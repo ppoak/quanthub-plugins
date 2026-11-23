@@ -1025,6 +1025,8 @@ def _run_jobs(
 
 def _merge_shards(
     *,
+    candidate_glob: str,
+    process_dates: Sequence[str],
     cfg: EvaluationConfig,
     project_root: Path,
     factor_source: str,
@@ -1059,6 +1061,12 @@ def _merge_shards(
         )
         engine._create_stage_tables()
         metric_paths = shards[0]
+        last_checked = storage.execute(
+            "SELECT MAX(date) FROM read_parquet(?) WHERE date BETWEEN CAST(? AS DATE) AND CAST(? AS DATE)",
+            [candidate_glob, process_dates[0], process_dates[-1]],
+        ).fetchone()[0]
+        if last_checked is not None:
+            engine._correlation_through[factor_columns[0]] = last_checked.isoformat()
         storage.execute(
             "INSERT INTO _evaluation_ic SELECT * FROM read_parquet("
             f"{storage.sql_literal(metric_paths[0].as_posix())})"
@@ -1165,6 +1173,8 @@ def run_parallel_single_column_evaluation(
             launch=launch,
         )
         return _merge_shards(
+            candidate_glob=candidate_glob,
+            process_dates=process_dates,
             cfg=cfg,
             project_root=project_root,
             factor_source=factor_source,

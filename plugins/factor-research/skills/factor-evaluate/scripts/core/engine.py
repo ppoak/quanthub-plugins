@@ -114,6 +114,7 @@ class _EvaluationEngine(
         ] = ()
         self._reference_labels: tuple[tuple[int, str], ...] = ()
         self._reference_refresh_active = False
+        self._correlation_through: dict[str, str] = {}
         self._reference_correlation_batch_size = (
             self.settings.reference_correlation_batch_size
         )

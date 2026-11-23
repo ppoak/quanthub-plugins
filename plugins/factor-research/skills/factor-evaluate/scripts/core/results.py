@@ -269,7 +269,7 @@ class _EvaluationResultsMixin:
             "(FORMAT CSV, HEADER TRUE, DELIMITER ',')"
         )
 
-    def _source_manifests(self) -> dict[str, Any]:
+    def _source_manifests(self, state: _ColumnState) -> dict[str, Any]:
         last_signal_date = self.signal_dates[-1]
         last_signal_index = self._calendar_index[last_signal_date]
         quote_index = min(
@@ -277,20 +277,14 @@ class _EvaluationResultsMixin:
             len(self.quote_dates) - 1,
         )
         quote_through = self.quote_dates[quote_index]
-        # Correlations use signal-date exposures only when the exit falls
-        # within the same evaluation period (as in the forward-return SQL).
-        holding_window = self.cfg.execution_lag_days + self.cfg.horizon_days
-        reference_through = "0001-01-01"  # Empty prefix if no signal has matured.
-        for signal in reversed(self.signal_dates):
-            exit_index = self._calendar_index[signal] + holding_window
-            period_end = next(end for end in (self.cfg.train_end, self.cfg.validation_end, self.end)
-                              if signal <= end)
-            if exit_index <= last_signal_index and self.quote_dates[exit_index] <= period_end:
-                reference_through = signal
-                break
+        checked = self._correlation_through.get(state.factor_column, "0001-01-01")
+        previous = state.config.get("evaluation", {}).get("source_manifests", {}).get("references", {})
         references: dict[str, Any] = {}
         for value in self.reference_factors:
             table = FactorPath.parse(value).table
+            reference_through = checked
+            if (state.incremental and not state.reference_refresh) or "correlation" not in self.tasks:
+                reference_through = max(checked, previous.get(table, {}).get("through", "0001-01-01"))
             references[table] = manifest_reference(
                 self._manifest(table, reference_through)
             )
@@ -353,7 +347,7 @@ class _EvaluationResultsMixin:
                         "intra_column_workers": self.cfg.intra_column_workers,
                     },
                     "files": {name: digest for name, digest in evaluation_files(staging).items()},
-                    "source_manifests": self._source_manifests(),
+                    "source_manifests": self._source_manifests(state),
                     "completed_at": datetime.now(timezone.utc).isoformat(),
                 },
             }
