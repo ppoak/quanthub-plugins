@@ -37,6 +37,49 @@ description: 补齐已有因子的最新数据，刷新验证、评估和总览�
 .venv/Scripts/python "<path-to-skill>/scripts/run_update.py" --target market_cap --task readme
 ```
 
+## 定时调度
+
+Factor Update 自己提供独立调度器，不并入数据库维护调度器。调度器到点后直接调用同目录的 `run_update.py`，默认更新 schema 中的 `active` 组，并继续使用各因子 README 中已通过的 Benchmark 资源配置。
+
+查看调度配置：
+
+```sh
+.venv/Scripts/python "<path-to-skill>/scripts/scheduler.py" --project-root . --list-jobs
+```
+
+立即执行一次：
+
+```sh
+.venv/Scripts/python "<path-to-skill>/scripts/scheduler.py" --project-root . --run-once
+```
+
+只预览一次更新计划：
+
+```sh
+.venv/Scripts/python "<path-to-skill>/scripts/scheduler.py" --project-root . --run-once --dry-run
+```
+
+长期运行调度器：
+
+```sh
+.venv/Scripts/python "<path-to-skill>/scripts/scheduler.py" --project-root .
+```
+
+调度时间、运行日期、日志、锁文件和可选的上游就绪标记从项目 `.env` 读取：
+
+```dotenv
+FACTOR_UPDATE_SCHEDULE_TIME=21:00
+FACTOR_UPDATE_SCHEDULE_DAYS=weekday
+FACTOR_UPDATE_TIMEZONE=Asia/Shanghai
+FACTOR_UPDATE_TARGET=active
+FACTOR_UPDATE_LOG_FILE=.tmp/factor_update/scheduler.log
+FACTOR_UPDATE_LOCK_FILE=.tmp/factor_update/scheduler.lock
+FACTOR_UPDATE_UPSTREAM_READY_FILE=.tmp/database-maintenance/upstream_ready.json
+FACTOR_UPDATE_REQUIRE_UPSTREAM_READY=1
+```
+
+设置 `FACTOR_UPDATE_REQUIRE_UPSTREAM_READY=1` 后，调度器只在上游就绪标记的 `status=success` 且 `target_date` 为当天时运行。未设置或设为 `0` 时直接按时间执行。运行中的任务会创建锁文件，避免同一项目重叠启动。调度器日志默认写入 `.tmp/factor_update/scheduler.log`。
+
 ## 参数
 
 | 参数 | 用途 |
@@ -49,6 +92,8 @@ description: 补齐已有因子的最新数据，刷新验证、评估和总览�
 | `--memory-limit` | 选择 Benchmark 已通过的内存限制 |
 | `--compute-batch-days` | 选择 Benchmark 已通过的每批交易日数 |
 | `--temp-directory` | 临时文件目录，默认由脚本安排 |
+
+调度器参数为 `--schedule-time`、`--schedule-days`、`--timezone`、`--run-once`、`--date`、`--dry-run`、`--list-jobs`、`--log-file`、`--lock-file` 和 `--upstream-ready-file`。长期部署只需保持 scheduler 进程运行，手动补跑使用 `--run-once`。
 
 通常不需要指定资源参数。脚本从各因子 README 的 Benchmark 表中选择最快的成功配置；手动指定时也必须匹配已通过的组合。记录缺失、不完整或格式无法识别时，先完成 Factor Benchmark，不自行猜测配置。计算、验证和评估使用所选线程与内存，后续阶段若资源不足，先处理失败再重试。
 
