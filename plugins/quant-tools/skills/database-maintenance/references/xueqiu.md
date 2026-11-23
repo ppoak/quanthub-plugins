@@ -50,6 +50,7 @@ XUEQIU_RELOGIN_SCHEDULE_TIME=22:00
 XUEQIU_RELOGIN_SCHEDULE_DAYS=all
 XUEQIU_RELOGIN_THRESHOLD_DAYS=5
 XUEQIU_RELOGIN_TIMEOUT=600
+XUEQIU_RELOGIN_VERIFY_TIMEOUT=20
 ```
 
 调度器在同一任务执行时间跨越后续任务的情况下，按 `DATABASE_MAINTENANCE_MISFIRE_GRACE_SECONDS` 配置的窗口补运行到期任务。
@@ -93,7 +94,9 @@ uv run --locked python "<path-to-skill>/scripts/xueqiu/fetch_xueqiu_cube_rebalan
 
 ### 它做什么
 
-重登录会打开 Chrome，把二维码发到邮箱，等用户扫码，然后把新的 token 写回 `.env`。
+调度器运行重登录任务时，会先用每个配置 token 调用雪球账号绑定和用户信息接口，核对手机号并获取雪球用户名。实际身份验证成功才算通过；token 缺失、接口失败或手机号不匹配的账号会进入 Chrome 二维码重登录流程，成功后把新的 token 写回 `.env`。
+
+调度器邮件会用独立表格行展示每个账号的手机号尾号和雪球用户名。验证或重登录失败时，用户名位置显示失败原因。
 
 二维码是否过期，以雪球页面为准。过期后不会自己发送新码；请回复对应的登录邮件，正文单独写 `刷新`，程序才会发送新二维码。从第一封二维码邮件发出后开始等十分钟，刷新不会重新计时；超时未完成就结束本次登录，保留原 token，等待下一次运行。
 
