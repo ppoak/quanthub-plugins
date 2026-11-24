@@ -10,11 +10,10 @@ import smtplib
 import hashlib
 import time
 import uuid
-import base64
 import json
 import urllib.error
 import urllib.request
-from datetime import datetime, timezone
+from datetime import datetime
 from email import message_from_bytes
 from email.header import decode_header
 from email.message import EmailMessage
@@ -24,55 +23,8 @@ from pathlib import Path
 
 AUTH_ROOT = Path(".tmp/database-maintenance/xueqiu-auth")
 DEFAULT_PROFILE_DIR = AUTH_ROOT / "browser"
-LOGIN_STATUS_PATH = AUTH_ROOT / "login_status.json"
 ACCOUNT_BIND_URL = "https://xueqiu.com/account/bind/show.json"
 USER_SHOW_URL = "https://xueqiu.com/user/show.json"
-
-
-def _jwt_expiry(id_token: str) -> int | None:
-    try:
-        payload = id_token.split(".")[1]
-        payload += "=" * (-len(payload) % 4)
-        return int(json.loads(base64.urlsafe_b64decode(payload)).get("exp"))
-    except (IndexError, TypeError, ValueError, json.JSONDecodeError):
-        return None
-
-
-def load_login_status(path: str | Path = LOGIN_STATUS_PATH) -> list[dict]:
-    status_path = Path(path)
-    if not status_path.exists():
-        return []
-    data = json.loads(status_path.read_text(encoding="utf-8"))
-    if isinstance(data, dict) and isinstance(data.get("accounts"), list):
-        return [item for item in data["accounts"] if isinstance(item, dict)]
-    return [data] if isinstance(data, dict) and "token_index" in data else []
-
-
-def save_login_status(
-    *, token_index: int, phone: str, cookies: list[dict], status: str,
-    username: str | None = None,
-) -> None:
-    AUTH_ROOT.mkdir(parents=True, exist_ok=True)
-    id_token = next((item["value"] for item in cookies if item["name"] == "xq_id_token"), "")
-    previous = next(
-        (item for item in load_login_status() if item.get("token_index") == token_index),
-        {},
-    )
-    record = {
-        "token_index": token_index,
-        "phone_suffix": phone[-4:],
-        "status": status,
-        "last_verified_at": datetime.now(timezone.utc).replace(microsecond=0).isoformat(),
-        "xq_id_token_exp": _jwt_expiry(id_token) if id_token else previous.get("xq_id_token_exp"),
-        "username": username if username is not None else previous.get("username"),
-    }
-    accounts = [item for item in load_login_status() if item.get("token_index") != token_index]
-    accounts.append(record)
-    accounts.sort(key=lambda item: int(item.get("token_index", 0)))
-    data = {"accounts": accounts}
-    temporary = LOGIN_STATUS_PATH.with_suffix(".tmp")
-    temporary.write_text(json.dumps(data, ensure_ascii=True, indent=2) + "\n", encoding="utf-8")
-    temporary.replace(LOGIN_STATUS_PATH)
 
 
 def send_qr_email(
@@ -192,24 +144,6 @@ def configured_login_targets() -> list[tuple[int, str, str]]:
     ]
 
 
-def expiring_login_targets(threshold_days: int = 5) -> list[tuple[int, str, str]]:
-    now = int(datetime.now(timezone.utc).timestamp())
-    threshold = now + threshold_days * 24 * 60 * 60
-    records = {int(item["token_index"]): item for item in load_login_status() if "token_index" in item}
-    targets = []
-    for token_index, phone, recipient in configured_login_targets():
-        record = records.get(token_index)
-        if not record:
-            continue
-        if record.get("status") == "relogin_required":
-            targets.append((token_index, phone, recipient))
-            continue
-        expiry = record.get("xq_id_token_exp")
-        if expiry is not None and int(expiry) <= threshold:
-            targets.append((token_index, phone, recipient))
-    return targets
-
-
 def _request_json(url: str, token: str, *, proxy: str | None, timeout: int) -> dict:
     request = urllib.request.Request(
         url,
@@ -278,9 +212,9 @@ def _token_values() -> list[str]:
 
 
 def scheduled_relogin(
-    *, threshold_days: int = 5, total_timeout_seconds: int = 600,
+    *, total_timeout_seconds: int = 600,
     env_path: str | Path = ".env", profile_dir: str | Path | None = None,
-) -> bool:
+) -> str | None:
     targets = configured_login_targets()
     if not targets:
         print("xueqiu_relogin_targets=0")
@@ -296,9 +230,6 @@ def scheduled_relogin(
             username = verify_token_account(
                 token, phone, proxy=proxy, timeout=validation_timeout,
             )
-            save_login_status(
-                token_index=token_index, phone=phone, cookies=[], status="valid", username=username,
-            )
             _record_account_summary(phone, username)
             print(f"xueqiu_account_check_success phone_suffix={phone[-4:]} username={username}")
             continue
@@ -307,7 +238,7 @@ def scheduled_relogin(
             print(f"xueqiu_account_check_failed phone_suffix={phone[-4:]} reason={reason}")
 
         print(f"xueqiu_relogin_start token_index={token_index} phone_suffix={phone[-4:]}")
-        relogin_success = playwright_relogin(
+        relogin_username = playwright_relogin(
             phone,
             token_index=token_index,
             recipient=recipient,
@@ -315,20 +246,11 @@ def scheduled_relogin(
             profile_dir=profile_dir,
             total_timeout_seconds=total_timeout_seconds,
         )
-        if not relogin_success:
+        if not relogin_username:
             _record_account_summary(phone, f"FAILED: {reason}; relogin did not complete")
             success = False
         else:
-            record = next(
-                (item for item in load_login_status() if item.get("token_index") == token_index),
-                {},
-            )
-            username = str(record.get("username") or "").strip()
-            if username:
-                _record_account_summary(phone, username)
-            else:
-                _record_account_summary(phone, "FAILED: relogin completed without username")
-                success = False
+            _record_account_summary(phone, relogin_username)
     return success
 
 
@@ -367,7 +289,7 @@ class AccountIdentityMismatch(RuntimeError):
     """The authenticated account does not match the requested phone."""
 
 
-def session_token(context, phone: str, *, timeout_ms: int) -> tuple[str, list[dict], str] | None:
+def session_token(context, phone: str, *, timeout_ms: int) -> tuple[str, str] | None:
     """Return a token only when the current session belongs to the target phone."""
     from playwright.sync_api import Error, TimeoutError
 
@@ -407,11 +329,7 @@ def session_token(context, phone: str, *, timeout_ms: int) -> tuple[str, list[di
     username = str(profile_data.get("screen_name") or profile_data.get("name") or "").strip()
     if not username:
         raise RuntimeError("Xueqiu user identity is missing username")
-    cookies = context.cookies(["https://xueqiu.com"])
-    token = next((item["value"] for item in cookies if item["name"] == "xq_a_token"), "")
-    if not token:
-        return None
-    return token, cookies, username
+    return token, username
 
 
 def _open_qr_login(page) -> None:
@@ -531,15 +449,11 @@ def playwright_relogin(
                 timeout_ms=30_000,
             )
             if verified is not None:
-                token, cookies, username = verified
+                token, username = verified
                 replace_token_in_env(token, token_index=token_index, env_path=env_path)
-                save_login_status(
-                    token_index=token_index, phone=phone, cookies=cookies,
-                    status="valid", username=username,
-                )
                 log_progress("completed", result="SUCCESS", session="reused", token_saved=True)
                 print("xueqiu_relogin_success=1", flush=True)
-                return True
+                return username
 
             page = context.pages[0] if context.pages else context.new_page()
             _open_qr_login(page)
@@ -565,15 +479,11 @@ def playwright_relogin(
                     )
                     next_identity_poll = time.monotonic() + 5
                 if verified is not None:
-                    token, cookies, username = verified
+                    token, username = verified
                     replace_token_in_env(token, token_index=token_index, env_path=env_path)
-                    save_login_status(
-                        token_index=token_index, phone=phone, cookies=cookies,
-                        status="valid", username=username,
-                    )
                     log_progress("completed", result="SUCCESS", session="qr", token_saved=True)
                     print("xueqiu_relogin_success=1", flush=True)
-                    return True
+                    return username
 
                 state = _qr_state(page)
                 if not qr_expired and ("刷新二维码" in state or "失效" in state):
@@ -598,20 +508,17 @@ def playwright_relogin(
                         qr_expired = False
                         log_progress("qr_refresh_email_sent", sequence=sequence, request_id=request_id)
 
-            save_login_status(token_index=token_index, phone=phone, cookies=[], status="relogin_required")
             log_progress("completed", result="FAILED", reason="qr_login_timeout", timeout_seconds=total_timeout_seconds)
             print("xueqiu_relogin_success=0", flush=True)
-            return False
+            return None
         except AccountIdentityMismatch:
-            save_login_status(token_index=token_index, phone=phone, cookies=[], status="relogin_required")
             log_progress("completed", result="FAILED", reason="account_identity_mismatch")
             print("xueqiu_relogin_success=0", flush=True)
-            return False
+            return None
         except Exception as exc:
-            save_login_status(token_index=token_index, phone=phone, cookies=[], status="relogin_required")
             log_progress("completed", result="FAILED", reason="runtime_error", error_type=type(exc).__name__)
             print("xueqiu_relogin_success=0", flush=True)
-            return False
+            return None
         finally:
             context.close()
 
@@ -636,7 +543,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Run a manual email-assisted Xueqiu re-login.")
     parser.add_argument("phone", nargs="?", help="Xueqiu login phone number")
     parser.add_argument(
-        "--check-expiring",
+        "--check-accounts",
         action="store_true",
         help="Verify every configured account and relogin accounts whose identity check fails.",
     )
@@ -645,7 +552,6 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--env-path", default=".env", help="Project dotenv path")
     parser.add_argument("--profile-dir", help="Root directory for persistent per-account login profiles")
     parser.add_argument("--timeout", type=int, default=600, help="Maximum login wait in seconds")
-    parser.add_argument("--threshold-days", type=int, default=5, help="Expiry threshold for --check-expiring")
     return parser.parse_args(argv)
 
 
@@ -676,17 +582,16 @@ def resolve_login_target(args: argparse.Namespace) -> tuple[int, str | None]:
 def main(argv: list[str] | None = None) -> int:
     args = parse_args(argv)
     load_dotenv(args.env_path)
-    if args.check_expiring:
+    if args.check_accounts:
         if args.phone or args.token_index is not None or args.recipient:
-            raise ValueError("--check-expiring cannot be combined with phone, --token-index, or --recipient")
+            raise ValueError("--check-accounts cannot be combined with phone, --token-index, or --recipient")
         return 0 if scheduled_relogin(
-            threshold_days=args.threshold_days,
             total_timeout_seconds=args.timeout,
             env_path=args.env_path,
             profile_dir=args.profile_dir,
         ) else 1
     if not args.phone:
-        raise ValueError("phone is required unless --check-expiring is used")
+        raise ValueError("phone is required unless --check-accounts is used")
     token_index, recipient = resolve_login_target(args)
     success = playwright_relogin(
         args.phone,

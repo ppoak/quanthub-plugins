@@ -48,7 +48,6 @@ XUEQIU_LOGIN_PHONES=<phone1>,<phone2>
 XUEQIU_LOGIN_EMAILS=<login-mailbox1>,<login-mailbox2>
 XUEQIU_RELOGIN_SCHEDULE_TIME=22:00
 XUEQIU_RELOGIN_SCHEDULE_DAYS=all
-XUEQIU_RELOGIN_THRESHOLD_DAYS=5
 XUEQIU_RELOGIN_TIMEOUT=600
 XUEQIU_RELOGIN_VERIFY_TIMEOUT=20
 ```
@@ -94,7 +93,7 @@ uv run --locked python "<path-to-skill>/scripts/xueqiu/fetch_xueqiu_cube_rebalan
 
 ### 它做什么
 
-调度器运行重登录任务时，会先用每个配置 token 调用雪球账号绑定和用户信息接口，核对手机号并获取雪球用户名。实际身份验证成功才算通过；token 缺失、接口失败或手机号不匹配的账号会进入 Chrome 二维码重登录流程，成功后把新的 token 写回 `.env`。
+调度器运行重登录任务时，会用每个配置 token 调用雪球账号绑定和用户信息接口，核对手机号并获取雪球用户名。实际身份验证成功才算通过；token 缺失、接口失败或手机号不匹配的账号会进入 Chrome 二维码重登录流程，成功后把新的 token 写回 `.env`。
 
 调度器邮件会用独立表格行展示每个账号的手机号尾号和雪球用户名。验证或重登录失败时，用户名位置显示失败原因。
 
@@ -128,7 +127,6 @@ XUEQIU_TOKENS=<token1>,<token2>
 
 XUEQIU_RELOGIN_SCHEDULE_TIME=22:00
 XUEQIU_RELOGIN_SCHEDULE_DAYS=all
-XUEQIU_RELOGIN_THRESHOLD_DAYS=5
 XUEQIU_RELOGIN_TIMEOUT=600
 ```
 

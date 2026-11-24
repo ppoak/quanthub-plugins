@@ -341,8 +341,7 @@ def _xueqiu_cube_args(target_date: dt.date) -> list[str]:
 
 def _xueqiu_relogin_args(_target_date: dt.date) -> list[str]:
     return [
-        "--check-expiring",
-        "--threshold-days", os.getenv("XUEQIU_RELOGIN_THRESHOLD_DAYS", "5"),
+        "--check-accounts",
         "--timeout", os.getenv("XUEQIU_RELOGIN_TIMEOUT", "600"),
     ]
 
