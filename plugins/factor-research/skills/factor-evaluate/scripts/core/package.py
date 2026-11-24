@@ -134,19 +134,30 @@ def refresh_evaluations(
         evaluation = evaluation if isinstance(evaluation, Mapping) else {}
         if end is not None:
             try:
-                check_evaluation_config(
+                checked = check_evaluation_config(
                     column_dir,
                     factor_name=factor_name,
                     factor_source=factor_source,
                     data_root=resolved_data_root,
                     project_root=root,
-                    end=end,
                     manifest_cache=manifest_cache,
                 )
             except (OSError, ValueError):
                 pass
             else:
-                continue
+                previous_end = str(
+                    checked["evaluation"]["requested_end"]
+                )
+                if previous_end > end:
+                    raise ValueError(
+                        f"evaluation requested end is later than the refresh target: "
+                        f"{column_dir}"
+                    )
+                if previous_end == end:
+                    continue
+                # The existing evaluation is valid through the previous
+                # requested end. Keep its configuration and let the engine
+                # append only the dates missing from the stored metrics.
         parameters = evaluation.get("parameters")
         parameters = parameters if isinstance(parameters, Mapping) else {}
         references = tuple(
