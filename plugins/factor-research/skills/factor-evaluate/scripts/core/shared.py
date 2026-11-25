@@ -398,7 +398,6 @@ class EvaluationConfig:
     tasks: tuple[str, ...] = ("ic", "portfolio", "correlation")
     rebuild: bool = False
     daily_update: bool = False
-    factor_fingerprint: str | None = None
     project_root: str | Path | None = None
     settings: EvaluationSettings | None = None
 

@@ -4,8 +4,6 @@ from .engine import EvaluationConfig, EvaluationSettings, run_evaluation
 from .shared import (Path, Sequence, Any, Mapping, FactorPath, resolve_factor_package,
     load_module_from_path, select_factor_columns, resolve_output_root, read_config)
 from factor_protocol import resolve_data_root, resolve_factor_data_root
-from factor_protocol.fingerprint import factor_definition_fingerprint
-from factor_protocol.identity import read_identity, require_identity
 from factor_protocol.protocol import resolve_factor_columns
 from factor_protocol.registry import load_core_factor_references
 from .validation import require_validation
@@ -48,18 +46,6 @@ def _resolve_reference_factors(
     return tuple(dict.fromkeys(references))
 
 
-def _package_identity(root, source, package, columns, *, daily_update):
-    factor_root = resolve_factor_data_root(project_root=root) / source
-    fingerprint = factor_definition_fingerprint(package)
-    if not daily_update:
-        return require_identity(factor_root, fingerprint=fingerprint, columns=columns)
-    identity = read_identity(factor_root)
-    if (identity.get("fingerprint") != fingerprint
-            or not set(columns).issubset(identity.get("columns", ()))):
-        raise ValueError(f"committed factor identity does not match the package: {factor_root}")
-    return identity
-
-
 def run_package_evaluation(cfg):
     root = Path(cfg.project_root or Path.cwd())
     source = cfg.storage_factor_name or cfg.factor_name
@@ -67,16 +53,21 @@ def run_package_evaluation(cfg):
         factor_module=cfg.factor_module, factor_zoo_root=cfg.factor_zoo_root)
     module = load_module_from_path(package.module_path, project_root=root, factor_name=cfg.factor_name)
     columns = select_factor_columns(module, cfg.factor_columns)
-    identity = _package_identity(root, source, package, columns, daily_update=cfg.daily_update)
-    if identity.get("factor_name") != cfg.factor_name:
-        raise ValueError("factor identity does not match the package")
-    require_validation(cfg, columns, identity["fingerprint"],
-                       committed_manifest=identity["manifest"] if cfg.daily_update else None)
+    end = cfg.end
+    if not cfg.daily_update or end is None:
+        factor_root = resolve_factor_data_root(project_root=root) / source
+        end = max((path.name[5:] for path in factor_root.glob("date=????-??-??")
+                   if path.is_dir() and (cfg.end is None or path.name[5:] <= cfg.end)),
+                  default=None)
+        if end is None:
+            raise ValueError(f"factor data is unavailable: {factor_root}")
+    output = resolve_output_root(cfg.output_dir, project_root=root) / cfg.factor_name
+    for column in columns:
+        require_validation(output / column, end=end)
     references = cfg.reference_factors if cfg.daily_update else _resolve_reference_factors(
         cfg.reference_factors, project_root=root, factor_zoo_root=cfg.factor_zoo_root
     )
-    return run_evaluation(replace(cfg, factor_columns=columns, reference_factors=references,
-                                  factor_fingerprint=identity["fingerprint"]))
+    return run_evaluation(replace(cfg, factor_columns=columns, reference_factors=references))
 
 
 def refresh_evaluations(
@@ -118,9 +109,6 @@ def refresh_evaluations(
         factor_name=factor_name,
     )
     factor_columns = select_factor_columns(module, None)
-    identity = _package_identity(root, factor_source, package, factor_columns, daily_update=daily_update)
-    if identity.get("factor_name") != factor_name:
-        raise ValueError("factor identity does not match the requested package")
     for column in factor_columns:
         column_dir = destination / column
         config = evaluation_config(read_config(column_dir / "config.json"))
@@ -128,7 +116,7 @@ def refresh_evaluations(
         if isinstance(factor, Mapping) and (
             factor.get("name") != factor_name
             or factor.get("column") != column
-            or factor.get("dataset", factor_name) != factor_source
+            or config.get("input") != (factor_source if factor_source != factor_name else None)
         ):
             raise ValueError(
                 f"evaluation config identifies another factor output: {column_dir}"
@@ -137,8 +125,6 @@ def refresh_evaluations(
         if daily_update:
             if not config.get("files"):
                 raise ValueError(f"daily update requires complete evaluation results: {column_dir}; run Evaluate")
-            if factor.get("fingerprint") != identity["fingerprint"]:
-                raise ValueError(f"calculation fingerprint changed: {column_dir}; rebuild evaluation")
             for key, value in daily_parameters.items():
                 if parameters.get(key) != value:
                     raise ValueError(f"daily update cannot change evaluation parameter {key}: {column_dir}")

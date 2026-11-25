@@ -1,6 +1,7 @@
 """Inspect factor history, source calendars and validation artifacts to derive an update plan."""
 from __future__ import annotations
 
+import csv
 import json
 import re
 import uuid
@@ -167,21 +168,26 @@ def _validation_artifact_state(
             not isinstance(factor, dict)
             or factor.get("name") != factor_name
             or factor.get("column") != column
-            or factor.get("dataset", factor_name) != factor_source
+            or payload.get("input", factor.get("dataset", factor_name)) != factor_source
         ):
             states.append((column, "factor_identity_mismatch"))
             continue
-        validation = payload.get("validation")
-        if isinstance(validation, dict) and "status" in validation:
-            proof = ({"fingerprint": factor.get("fingerprint"), **validation.get("data", {})}
-                     if validation["status"] == "pass" else {})
-        elif validation is None:
-            proof = factor if payload.get("files") else {}
-        else:
-            proof = validation if isinstance(validation, dict) else {}
         audit_path = path.parent / "audit.csv"
         if not audit_path.is_file() or audit_path.stat().st_size == 0:
             states.append((column, "missing_audit"))
+            continue
+        validation = payload.get("validation")
+        if validation is None and payload.get("files"):
+            with audit_path.open(newline="", encoding="utf-8") as stream:
+                through = max((row.get("date") or "" for row in csv.DictReader(stream)), default="")
+            if not through or through < source_end:
+                states.append((column, f"stale_end={through}"))
+            continue
+        if isinstance(validation, dict) and "status" in validation:
+            proof = ({"fingerprint": factor.get("fingerprint"), **validation.get("data", {})}
+                     if validation["status"] == "pass" else {})
+        else:
+            proof = validation if isinstance(validation, dict) else {}
         if not proof:
             states.append((column, "missing_passing_validation"))
         elif proof.get("fingerprint") != fingerprint:

@@ -264,16 +264,12 @@ class _EvaluationResultsMixin:
             factor = {
                 **({"name": self.cfg.factor_name} if self.cfg.factor_name else {}),
                 "column": state.factor_column,
-                **({"fingerprint": self.cfg.factor_fingerprint} if self.cfg.factor_fingerprint else {}),
-                **self.snapshot,
-                **({"path": self.cfg.factor_data.as_posix()} if self.cfg.factor_data else {}),
-                **({"dataset": self.factor_source}
-                   if self.cfg.factor_name and self.factor_source != self.cfg.factor_name else {}),
             }
             parameters = self._semantic_parameters()
             previous_files = state.config.get("files", {})
             compatible = (state.config.get("factor") == factor
-                          and state.config.get("parameters") == parameters)
+                          and state.config.get("parameters") == parameters
+                          and state.config.get("input") == self.input)
             selected = {"returns" if task == "portfolio" else task for task in self.tasks}
             if state.output_dir.exists():
                 for path in state.output_dir.iterdir():
@@ -288,7 +284,12 @@ class _EvaluationResultsMixin:
                         shutil.copy2(previous, staging / filename)
                     else:
                         self._copy_query_to_csv(self._metric_query(state, metric), staging / filename)
-                elif compatible and filename in previous_files:
+                elif compatible and filename in previous_files and (
+                    state.config.get("partial_end") == self.end
+                    or ("partial_end" not in state.config
+                        and (self._last_date(previous) == self.mature_end
+                             or (metric == "correlation" and not self.reference_factors)))
+                ):
                     shutil.copy2(previous, staging / filename)
             files = evaluation_files(staging)
             for metric, filename in EVALUATION_FILES.items():
@@ -299,6 +300,8 @@ class _EvaluationResultsMixin:
                 "parameters": parameters,
                 "files": files,
                 "completed_at": datetime.now(timezone.utc).isoformat(),
+                **({"input": self.input} if self.input is not None else {}),
+                **({"partial_end": self.end} if len(files) != len(EVALUATION_FILES) else {}),
             })
             return staging
         except Exception:

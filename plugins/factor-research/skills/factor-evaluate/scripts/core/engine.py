@@ -7,7 +7,6 @@ from time import monotonic
 
 
 from .compute import _EvaluationComputeMixin
-from .check import factor_snapshot
 from factor_protocol import resolve_data_root, resolve_factor_data_root
 from .results import _EvaluationResultsMixin
 from .shared import (
@@ -39,6 +38,7 @@ from .shared import (
     resolve_output_root,
     shutil,
     validate_identifier,
+    write_config,
 )
 from .state import _EvaluationStateMixin
 
@@ -61,6 +61,11 @@ class _EvaluationEngine(
         self.settings = cfg.settings or EvaluationSettings()
         self.project_root = project_root
         self.factor_source = validate_identifier(factor_source, "factor_source")
+        self.input = (
+            cfg.factor_data.as_posix() if cfg.factor_data is not None
+            else cfg.storage_factor_name if cfg.storage_factor_name != cfg.factor_name
+            else None
+        )
         self.factor_columns = tuple(
             validate_identifier(column, "factor_column") for column in factor_columns
         )
@@ -102,7 +107,6 @@ class _EvaluationEngine(
             value: index for index, value in enumerate(self.quote_dates)
         }
         self._anchor_signal_index = self._calendar_index[self.signal_dates[0]]
-        self.snapshot = factor_snapshot(storage.factor_root, through=self.end)
         last_mature_index = self._calendar_index[self.end] - cfg.horizon_days - cfg.execution_lag_days
         self.mature_end = self.quote_dates[last_mature_index] if last_mature_index >= 0 else ""
         self._states: tuple[_ColumnState, ...] = ()
@@ -127,9 +131,11 @@ class _EvaluationEngine(
         print(f"{label} | phase=preparing data", flush=True)
         self._states = self._column_states()
         result = self._states[0].output_dir if len(self._states) == 1 else self.output_root
-        if all(state.incremental and state.cutoff > self.mature_end
-               and state.config["factor"]["through"] == self.end
-               and "validation" not in state.config for state in self._states):
+        if all(state.incremental and state.cutoff > self.mature_end for state in self._states):
+            for state in self._states:
+                if "validation" in state.config:
+                    config = {key: value for key, value in state.config.items() if key != "validation"}
+                    write_config(state.output_dir / "config.json", config)
             print(f"{label} | phase=no new eligible dates", flush=True)
             return result, []
         self._validate_quote_schema()

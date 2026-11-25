@@ -12,7 +12,6 @@ from typing import Any, Mapping, Sequence
 
 import duckdb
 from .validation import check_package_evaluation as check_evaluation_config
-from factor_protocol import resolve_data_root
 from factor_protocol.readme import set_acceptance
 from core.selection import read_selection_rows, selection_details
 
@@ -236,12 +235,9 @@ def _test_metrics(
 
 def _evaluation_scope(payload: Mapping[str, Any]) -> tuple[dict[str, Any], str]:
     parameters = payload["parameters"]
-    factor = payload["factor"]
     signature = {
         "begin": parameters["begin"],
         "parameters": parameters,
-        "through": factor["through"],
-        "sha256": factor["sha256"],
     }
     return signature, parameters["validation_end"]
 
@@ -380,7 +376,6 @@ def update_factor_readme(
     factor_name: str,
     columns: Sequence[str],
     project_root: str | Path = ".",
-    data_root: str | Path | None = None,
     failures: Mapping[str, str] | None = None,
 ) -> bool:
     if not readme_path.is_file():
@@ -390,10 +385,6 @@ def update_factor_readme(
             f"no declared factor columns for {factor_name}"
         )
 
-    resolved_data_root = resolve_data_root(
-        project_root=project_root, data_root=data_root
-    )
-    manifest_cache: dict[tuple[str, str], dict[str, Any]] = {}
     payloads: dict[str, dict[str, Any]] = {}
     signatures: list[dict[str, Any]] = []
     watermarks: list[str] = []
@@ -406,9 +397,7 @@ def update_factor_readme(
             payload = check_evaluation_config(
                 config_path.parent,
                 factor_name=factor_name,
-                data_root=resolved_data_root,
                 project_root=project_root,
-                manifest_cache=manifest_cache,
             )
         except (OSError, ValueError) as exc:
             raise IncompleteEvaluationArtifacts(str(exc)) from exc

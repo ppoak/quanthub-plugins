@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from .check import EVALUATION_FILES, check_evaluation_config, evaluation_config, factor_snapshot
+from .check import EVALUATION_FILES, check_evaluation_config, evaluation_config
 
 from .shared import (
     EVALUATION_VARIANTS,
@@ -81,8 +81,7 @@ class _EvaluationStateMixin:
             if factor and (
                 factor.get("name") != self.cfg.factor_name
                 or factor.get("column") != column
-                or factor.get("dataset", self.cfg.factor_name or "_factor_data") != self.factor_source
-                or factor.get("path") != (self.cfg.factor_data.as_posix() if self.cfg.factor_data else None)
+                or config.get("input") != self.input
             ):
                 raise ValueError(f"existing results identify another input: {destination}")
             if (self.cfg.factor_name and set(self.tasks) != {"ic", "portfolio", "correlation"}
@@ -109,25 +108,11 @@ class _EvaluationStateMixin:
     def _resume_column(self, state: _ColumnState) -> _ColumnState:
         destination = state.output_dir
         config = check_evaluation_config(
-            destination, factor_name=self.cfg.factor_name, factor_source=self.factor_source,
-            factor_data=self.cfg.factor_data, data_root=self.data_root,
-            project_root=self.project_root, verify_sources=False,
+            destination, factor_name=self.cfg.factor_name, factor_source=self.cfg.storage_factor_name,
+            factor_data=self.cfg.factor_data, project_root=self.project_root,
         )
-        factor = config["factor"]
-        if factor.get("fingerprint") != self.cfg.factor_fingerprint:
-            raise ValueError(f"calculation fingerprint changed: {destination}; rebuild evaluation")
         if config["parameters"] != self._semantic_parameters():
             raise ValueError(f"evaluation parameters changed: {destination}; rebuild evaluation")
-        if factor["through"] > self.end:
-            raise ValueError(f"evaluation snapshot is ahead of the current factor data: {destination}")
-        if factor["through"] == self.end:
-            snapshot = self.snapshot
-        elif not self.cfg.daily_update:
-            snapshot = factor_snapshot(self.storage.factor_root, through=factor["through"])
-        else:
-            snapshot = factor
-        if factor["sha256"] != snapshot["sha256"]:
-            raise ValueError(f"evaluated factor data changed: {destination}; rebuild evaluation")
         if len(self._stored_selection_rows(state)) != len(EVALUATION_VARIANTS):
             raise ValueError(f"existing selection cannot be recovered: {destination}")
 
@@ -140,8 +125,8 @@ class _EvaluationStateMixin:
             date = self._last_date(path)
             if date is None:
                 raise ValueError(f"existing result has no valid cutoff: {path}")
-            if date > factor["through"]:
-                raise ValueError(f"existing result exceeds its factor snapshot: {path}")
+            if date > self.mature_end:
+                raise ValueError(f"existing result date {date} is ahead of the evaluable range: {path}")
             cutoffs[metric] = self._next_signal_date(date) or "9999-12-31"
         return _ColumnState(state.factor_column, destination, config, cutoffs, True)
 

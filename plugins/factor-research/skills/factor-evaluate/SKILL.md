@@ -15,7 +15,7 @@ description: 评估因子包或已有评分数据，计算 IC、组合收益和�
 
 选择一种输入：
 
-- `--factor-package <name>`：评估因子包。运行前检查代码、数据和已有验证结果是否一致，验证范围须覆盖评估区间；检查失败时停止，不自动运行 Validate。
+- `--factor-package <name>`：评估因子包。运行前读取已有验证结果，验证范围须覆盖评估区间。代码和数据身份由 Calculate 维护。
 - `--factor-data <directory> --factor-column <column>`：直接读取评分目录中的日度 Parquet。数据须含 `date, code` 和指定的评分列，不需要因子名称、源码包或验证记录。
 - `--all-alpha`：评估已注册的全部非 Barra alpha 因子包。
 

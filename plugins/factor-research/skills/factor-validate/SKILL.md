@@ -23,7 +23,7 @@ uv run --locked python "<path-to-skill>/scripts/run_validate.py" --help
 
 脚本回写 README 第 6 节，并维护第 4 节第 4 项；全部声明列通过才勾选，失败以非零状态退出。未来数据审查和完整历史唯一键检查分别由 Review、Calculate 负责。
 
-临时计算文件在验证结束后清理，结果保留在 README；检查已有数据时保留 `audit.csv` 和 `config.json`，供评估使用。检查失败或历史因子数据变化时，现有评估标为 `stale`。产物字段与通过条件见[验证规范](references/validation-specification.md)。
+临时计算文件在验证结束后清理，结果保留在 README。检查已有数据时，`audit.csv` 和 `config.json` 提供验证记录。验证失败时，Evaluate 停止。产物字段与通过条件见[验证规范](references/validation-specification.md)。
 
 ## 失败介入
 

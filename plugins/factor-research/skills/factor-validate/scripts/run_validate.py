@@ -1225,8 +1225,8 @@ def _write_canonical_validation(
         factor = {
             "name": factor_name,
             "column": factor_column,
-            **({"dataset": storage.factor_name} if storage.factor_name != factor_name else {}),
         }
+        alternate = storage.factor_name if storage.factor_name != factor_name else None
         validation = {
             "status": status,
             "begin": requested_begin or begin,
@@ -1240,15 +1240,15 @@ def _write_canonical_validation(
             validation["error"] = validator_error or ",".join(dict.fromkeys(reasons))
         if not payload.get("files") and not payload.get("evaluation"):
             payload = {"factor": factor}
-        elif any(payload.get("factor", {}).get(key) != value for key, value in factor.items()):
-            raise ValueError(f"existing evaluation identifies another factor: {destination}")
-        snapshot = {"fingerprint": fingerprint, **manifest_reference(source_manifest)}
-        if payload.get("files") and status == "pass" and all(
-            payload["factor"].get(key) == value for key, value in snapshot.items()
-        ):
-            payload.pop("validation", None)
+            if alternate is not None:
+                payload["input"] = alternate
         else:
-            payload["validation"] = snapshot if status == "pass" else "fail"
+            previous = payload.get("factor", {})
+            if (any(previous.get(key) != value for key, value in factor.items())
+                    or payload.get("input", previous.get("dataset")) != alternate):
+                raise ValueError(f"existing evaluation identifies another factor: {destination}")
+        snapshot = {"fingerprint": fingerprint, **manifest_reference(source_manifest)}
+        payload["validation"] = snapshot if status == "pass" else "fail"
         report_columns.append(
             {
                 "factor_column": factor_column,
