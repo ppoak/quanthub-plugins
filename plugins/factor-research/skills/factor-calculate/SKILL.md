@@ -23,6 +23,8 @@ uv run --locked python "<path-to-skill>/scripts/run_calculate.py" --help
 
 脚本检查日期边界、声明列、唯一 `(date, code)` 键和有限值，通过后提交 Parquet 数据与 `identity.json`。物化检查失败保留原数据；符合因子定义的零输出日无需补零。
 
+同一因子包只允许一个写入进程。锁文件随写入开始创建，释放锁时清除。
+
 正式验收覆盖包内全部声明列，以及 `FACTOR_CALCULATE_BEGIN/END` 指定的完整历史；未配置时使用源日历全范围。脚本自动调用 Validate 做收尾独立复算，回写 README 第 6 节并保留 `audit.csv`、`config.json`。完整历史检查与收尾复算均通过才完成验收，维护 README 第 4 节第 4、6 项；失败以非零状态退出。
 
 指定列、使用独立存储名或 `--no-readme-update` 会跳过收尾复算。
