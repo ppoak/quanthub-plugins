@@ -6,9 +6,9 @@ import re
 import uuid
 from datetime import date
 from factor_protocol import FactorStorage, resolve_factor_columns, resolve_factor_data_root
-from factor_protocol.artifacts import dataset_manifest, manifests_match, resolve_output_root
+from factor_protocol.artifacts import resolve_output_root
 from factor_protocol.fingerprint import factor_definition_fingerprint
-from factor_protocol.identity import read_identity, stored_identity_matches
+from factor_protocol.identity import read_identity
 from factor_protocol.loader import _project_path, load_module_from_path, resolve_factor_package
 from pathlib import Path
 from typing import Any, Sequence
@@ -74,27 +74,6 @@ def _update_source_dates(
     return sorted(available_dates)
 
 
-def _update_source_tables(module: Any, *, calendar: str) -> tuple[str, ...]:
-    """Return raw datasets whose rewrites can invalidate recent outputs."""
-
-    explicit = getattr(module, "UPDATE_SOURCE_TABLES", None)
-    if explicit is None:
-        if calendar == "quotes_common":
-            explicit = getattr(
-                module,
-                "UPDATE_CALENDAR_TABLES",
-                ("quotes_day", "quotes_min"),
-            )
-        else:
-            explicit = (calendar,)
-    tables = tuple(dict.fromkeys(str(value) for value in explicit))
-    if not tables:
-        raise ValueError("UPDATE_SOURCE_TABLES must contain upstream table names")
-    for table in tables:
-        FactorStorage.identifier(table)
-    return tables
-
-
 def _update_source_factors(module: Any) -> tuple[str, ...]:
     """Return materialized factor datasets that feed the current factor."""
 
@@ -110,15 +89,6 @@ def _update_source_factors(module: Any) -> tuple[str, ...]:
                 "UPDATE_SOURCE_FACTORS must contain identifier-safe factor names"
             )
     return factors
-
-
-def _partition_mtime_ns(partition: Path) -> int:
-    mtimes = [
-        path.stat().st_mtime_ns
-        for path in partition.rglob("*.parquet")
-        if path.is_file()
-    ]
-    return max(mtimes, default=0)
 
 
 def resolve_update_calendar(module: Any) -> str:
@@ -157,49 +127,6 @@ def _ensure_factor_output_writable(storage: FactorStorage) -> None:
         ) from exc
 
 
-def _changed_source_dates(
-    storage: FactorStorage,
-    *,
-    source_dates: Sequence[str],
-    source_tables: Sequence[str],
-    source_factors: Sequence[str] = (),
-    lookback: int = 400,
-) -> list[str]:
-    """Compare recent source partitions with their existing factor outputs."""
-    changed: set[str] = set()
-    datasets = tuple(dict.fromkeys((*source_tables, *source_factors)))
-    candidate_dates = sorted(set(source_dates))[-max(int(lookback), 1) :]
-    for value in candidate_dates:
-        output_mtime = _partition_mtime_ns(storage.factor_root / f"date={value}")
-        if output_mtime and any(
-            _partition_mtime_ns(storage.table_root(dataset) / f"date={value}") > output_mtime
-            for dataset in datasets
-        ):
-            changed.add(value)
-    return sorted(changed)
-
-
-def _stored_factor_columns(storage: FactorStorage) -> tuple[str, ...]:
-    """Check the first, middle and latest output schemas before updating."""
-
-    partitions = _partition_dates(storage.factor_root)
-    if not partitions:
-        return ()
-    sample_indices = sorted({0, len(partitions) // 2, len(partitions) - 1})
-    columns: set[str] = set()
-    for index in sample_indices:
-        source = storage.partition_scan_sql(
-            storage.factor_name,
-            begin=partitions[index],
-            end=partitions[index],
-        )
-        rows = storage.execute(f"DESCRIBE SELECT * FROM {source}").fetchall()
-        columns.update(
-            str(row[0]) for row in rows if str(row[0]) not in {"code", "date", "time"}
-        )
-    return tuple(sorted(columns))
-
-
 def _refresh_failure_marker(project_root: Path, factor_name: str) -> Path:
     return project_root / ".tmp" / "factor_update" / factor_name / "refresh_failed.json"
 
@@ -219,16 +146,6 @@ def _validation_artifact_state(
     factor_source = storage_factor_name or factor_name
     factor_data = resolve_factor_data_root(project_root=project_root)
     fingerprint = read_identity(factor_data / factor_source).get("fingerprint")
-    cache: dict[tuple[str, str], dict[str, Any]] = {}
-
-    def snapshot_current(stored: Any, table: str) -> bool:
-        if not isinstance(stored, dict) or not isinstance(stored.get("through"), str):
-            return False
-        key = (table, stored["through"])
-        if key not in cache:
-            cache[key] = dataset_manifest(factor_data, table, through=stored["through"])
-        return manifests_match(stored, cache[key])
-
     states: list[tuple[str, str]] = []
     for column in factor_columns:
         path = root / column / "config.json"
@@ -269,12 +186,10 @@ def _validation_artifact_state(
             states.append((column, "missing_validation_end"))
         elif end < source_end:
             states.append((column, f"stale_end={end}"))
-        if not snapshot_current(validation.get("data"), factor_source):
-            states.append((column, "stale_data"))
     if not states:
         return None
     if any(
-        not (detail.startswith("stale_end=") or detail == "stale_data")
+        not detail.startswith("stale_end=")
         for _, detail in states
     ):
         state = "validation_failed"
@@ -303,7 +218,6 @@ def plan_update(cfg: UpdateConfig) -> UpdatePlan | UpdateResult:
                             duckdb_settings={"temp_directory": ""} if cfg.dry_run else None)
     try:
         calendar = resolve_update_calendar(module)
-        source_tables = _update_source_tables(module, calendar=calendar)
         source_factors = _update_source_factors(module)
         dates = _update_source_dates(storage, calendar=calendar, module=module, source_factors=source_factors)
         if not dates:
@@ -311,29 +225,16 @@ def plan_update(cfg: UpdateConfig) -> UpdatePlan | UpdateResult:
         end = dates[-1]
         identity = read_identity(storage.factor_root)
         manifest = identity.get("manifest", {})
-        output = set(_partition_dates(storage.factor_root))
-        output.update(day for day in (manifest.get("begin"), manifest.get("end")) if day)
-        output = sorted(output)
+        output = _partition_dates(storage.factor_root)
         before_end = output[-1] if output else None
         if output:
-            if set(_stored_factor_columns(storage)) != set(columns):
-                return UpdateResult(cfg.factor_name, "schema_mismatch", end=end, before_end=before_end,
-                                    after_end=before_end, message="stored factor schema differs; full rebuild required")
-            matches = stored_identity_matches(storage, fingerprint=factor_definition_fingerprint(package))
-            if (not matches or identity.get("factor_name") != cfg.factor_name
-                    or set(identity.get("columns", ())) != set(columns)):
+            if (identity.get("fingerprint") != factor_definition_fingerprint(package)
+                    or identity.get("factor_name") != cfg.factor_name
+                    or set(identity.get("columns", ())) != set(columns)
+                    or manifest.get("end") != before_end):
                 return UpdateResult(cfg.factor_name, "rebuild_required", begin=output[0], end=end,
                                     before_end=before_end, after_end=before_end,
                                     message="factor data identity is missing or changed; run factor-calculate full-history workflow")
-            detect_rewrites = (hasattr(module, "UPDATE_SOURCE_TABLES")
-                               or calendar == "quotes_common" or bool(source_factors))
-            changed = (_changed_source_dates(storage, source_dates=dates, source_tables=source_tables,
-                                             source_factors=source_factors) if detect_rewrites else [])
-            if changed:
-                return UpdateResult(cfg.factor_name, "rebuild_required", begin=changed[0], end=end,
-                                    before_end=before_end, after_end=before_end,
-                                    message="materialized source partitions were rewritten at " + ",".join(changed)
-                                    + "; run factor-calculate full-history workflow")
             pending = [day for day in dates if day > before_end]
             if not pending:
                 return _plan_refresh(cfg, end=end, before_end=before_end, columns=columns)

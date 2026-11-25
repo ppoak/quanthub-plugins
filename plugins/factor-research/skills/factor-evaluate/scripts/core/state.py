@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from factor_protocol.identity import read_identity
+
 from .shared import (
     EVALUATION_VARIANTS,
     Any,
@@ -118,6 +120,11 @@ class _EvaluationStateMixin:
         key = (dataset, through)
         if key not in self._manifest_cache:
             root = self.storage.table_root(dataset)
+            if self.cfg.daily_update:
+                committed = read_identity(root).get("manifest", {})
+                if committed.get("end") == through and committed.get("sha256"):
+                    self._manifest_cache[key] = {"through": through, "sha256": committed["sha256"]}
+                    return self._manifest_cache[key]
             self._manifest_cache[key] = dataset_manifest(
                 root.parent,
                 root.name,
@@ -170,10 +177,7 @@ class _EvaluationStateMixin:
             "reference_factors": list(self.reference_factors),
         }
 
-    def _column_states(
-        self,
-        current_factor_manifest: Mapping[str, Any],
-    ) -> tuple[_ColumnState, ...]:
+    def _column_states(self) -> tuple[_ColumnState, ...]:
         states: list[_ColumnState] = []
         for column in self.factor_columns:
             destination = self.output_root / column
@@ -186,9 +190,10 @@ class _EvaluationStateMixin:
                     or factor.get("path") != (self.cfg.factor_data.as_posix() if self.cfg.factor_data else None)):
                 raise ValueError("existing results identify another input")
             reusable = self._can_reuse_metrics(config, destination)
-            incremental = reusable and self._can_increment(config)
+            incremental = reusable and (self.cfg.daily_update or self._can_increment(config))
             reference_refresh = (
-                reusable and not incremental and self._can_reference_refresh(config)
+                not self.cfg.daily_update and reusable and not incremental
+                and self._can_reference_refresh(config)
             )
             cutoff = self.begin
             if incremental or reference_refresh:
@@ -209,6 +214,8 @@ class _EvaluationStateMixin:
                     incremental = False
                     reference_refresh = False
                     cutoff = self.begin
+            if self.cfg.daily_update and not incremental:
+                raise ValueError(f"daily update cannot reuse existing evaluation results: {destination}")
             states.append(
                 _ColumnState(
                     factor_column=column,

@@ -1,7 +1,8 @@
 """Evaluate factor packages or explicit factor data through one configurable pipeline."""
-from argparse import ArgumentParser, Namespace
+import os
+from argparse import SUPPRESS, ArgumentParser, Namespace
 from pathlib import Path
-from core.shared import EvaluationSettings
+from core.shared import EvaluationSettings, _read_dotenv
 from core.evaluation import run
 
 
@@ -25,6 +26,7 @@ def add_arguments(parser: ArgumentParser) -> None:
         action="store_true",
         help="Refresh existing canonical evaluation artifacts for one factor.",
     )
+    parser.add_argument("--daily-update", action="store_true", help=SUPPRESS)
     parser.add_argument("--data-root")
     parser.add_argument("--factor-zoo-root")
     parser.add_argument("--storage-factor-name")
@@ -121,7 +123,29 @@ def main():
     add_arguments(parser)
     args = parser.parse_args()
     root = Path(args.project_root).resolve()
-    _apply_settings(args, EvaluationSettings.from_project_root(root))
+    settings = EvaluationSettings.from_project_root(root)
+    if args.daily_update:
+        if not args.refresh or (args.operation and "readme" in args.operation):
+            parser.error("--daily-update requires --refresh and cannot write README")
+        dotenv = _read_dotenv(root / ".env")
+        args.daily_parameters = {}
+        for option, stored_key in (
+            ("begin", "begin"), ("direction", "direction"), ("train_end", "train_end"),
+            ("validation_end", "validation_end"), ("horizon_days", "horizon_days"),
+            ("execution_lag_days", "execution_lag_days"), ("price_col", "price_col"),
+            ("quantiles", "quantiles"), ("top_percentile", "top_percentile"),
+            ("rolling_mean_days", "rolling_mean_days"),
+            ("neutralization_industry_level", "industry_level"),
+        ):
+            env_key = f"FACTOR_EVALUATE_{option.upper()}"
+            explicit = getattr(args, option)
+            if explicit is not None:
+                args.daily_parameters[stored_key] = explicit
+            elif os.environ.get(env_key, dotenv.get(env_key, "")).strip():
+                args.daily_parameters[stored_key] = getattr(settings, option)
+        if args.reference_factor is not None:
+            args.daily_parameters["reference_factors"] = args.reference_factor
+    _apply_settings(args, settings)
     try:
         return run(args, project_root=root)
     except (OSError, ValueError) as error:

@@ -431,6 +431,7 @@ class EvaluationConfig:
     intra_column_workers: int = 1
     tasks: tuple[str, ...] = ("ic", "portfolio", "correlation")
     rebuild: bool = False
+    daily_update: bool = False
     project_root: str | Path | None = None
     settings: EvaluationSettings | None = None
 

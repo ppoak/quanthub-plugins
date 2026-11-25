@@ -50,6 +50,7 @@ def check_evaluation_config(
     factor_data: str | Path | None = None,
     end: str | None = None,
     manifest_cache: dict[tuple[str, str], dict[str, Any]] | None = None,
+    verify_sources: bool = True,
 ) -> dict[str, Any]:
     """Require complete metrics from unchanged input snapshots."""
     config = read_config(column_dir / "config.json")
@@ -106,6 +107,9 @@ def check_evaluation_config(
         raise ValueError(f"evaluation does not cover the requested end: {column_dir}")
     if not evaluation_files_match(column_dir, evaluation):
         raise ValueError(f"evaluation metric changed or is missing: {column_dir}")
+
+    if not verify_sources:
+        return config
 
     cache = manifest_cache if manifest_cache is not None else {}
     factor_sources = {dataset, *(FactorPath.parse(value).table for value in parameters["reference_factors"])}

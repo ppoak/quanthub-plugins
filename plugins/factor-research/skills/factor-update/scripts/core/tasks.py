@@ -147,6 +147,7 @@ def refresh_validation(
         "--project-root",
         project_root.as_posix(),
         "--no-readme-update",
+        "--daily-update",
     ]
     if cfg.validation_memory_limit:
         validation_args.extend(("--memory-limit", cfg.validation_memory_limit))
@@ -166,7 +167,7 @@ def refresh_evaluation(cfg: UpdateConfig, *, end: str) -> None:
     temp = (_project_path(cfg.temp_directory, project_root=root) / "evaluation"
             if cfg.temp_directory is not None
             else root / ".tmp" / "factor_update" / (cfg.storage_factor_name or cfg.factor_name) / "evaluation")
-    arguments = ["--refresh", "--factor-package", cfg.factor_name, "--project-root", root.as_posix(),
+    arguments = ["--refresh", "--daily-update", "--factor-package", cfg.factor_name, "--project-root", root.as_posix(),
                  "--data-root", str(cfg.data_root), "--factor-zoo-root", str(cfg.factor_zoo_root),
                  "--output-dir", cfg.factor_output_root, "--threads", str(cfg.threads),
                  "--memory-limit", cfg.memory_limit, "--temp-directory", temp.as_posix(), "--end", end]

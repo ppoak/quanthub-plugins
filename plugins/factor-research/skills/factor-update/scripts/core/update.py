@@ -14,8 +14,7 @@ from factor_protocol import (
     resolve_factor_data_root,
     resolve_factor_zoo_root,
 )
-from factor_protocol.artifacts import dataset_manifest, manifests_match, resolve_output_root
-from factor_protocol.identity import read_identity
+from factor_protocol.artifacts import resolve_output_root
 from pathlib import Path
 from typing import Any, Sequence
 

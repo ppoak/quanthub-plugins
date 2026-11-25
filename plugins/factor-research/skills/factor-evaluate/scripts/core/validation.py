@@ -9,11 +9,16 @@ from factor_protocol.fingerprint import factor_definition_fingerprint
 from factor_protocol.identity import require_identity
 
 
-def require_validation(cfg, columns, fingerprint):
+def require_validation(cfg, columns, fingerprint, *, committed_manifest=None):
     root = Path(cfg.project_root or Path.cwd())
     source = cfg.storage_factor_name or cfg.factor_name
     data = resolve_factor_data_root(project_root=root)
-    current = dataset_manifest(data, source, through=cfg.end)
+    if committed_manifest is None:
+        current = dataset_manifest(data, source, through=cfg.end)
+        latest = current["maximum_date"]
+    else:
+        latest = committed_manifest["end"]
+        current = {"through": latest, "sha256": committed_manifest["sha256"]}
     output = resolve_output_root(cfg.output_dir, project_root=root) / cfg.factor_name
     for column in columns:
         directory = output / column
@@ -27,8 +32,12 @@ def require_validation(cfg, columns, fingerprint):
             raise ValueError(f"validation input or calculation fingerprint differs: {directory}")
         snapshot = validation.get("data", {})
         through = snapshot.get("through")
-        if (not through or not current["maximum_date"] or through < current["maximum_date"]
-                or not manifests_match(snapshot, dataset_manifest(data, source, through=through))):
+        if not through or not latest or through < latest:
+            raise ValueError(f"validation is stale: {directory}")
+        expected = current
+        if committed_manifest is None and through != cfg.end:
+            expected = dataset_manifest(data, source, through=through)
+        if not manifests_match(snapshot, expected):
             raise ValueError(f"validation is stale: {directory}")
 
 

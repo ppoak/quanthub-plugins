@@ -38,7 +38,7 @@ from factor_protocol.artifacts import (
     write_config,
 )
 from factor_protocol.fingerprint import factor_definition_fingerprint
-from factor_protocol.identity import require_identity
+from factor_protocol.identity import read_identity, require_identity
 from factor_protocol.loader import load_module_from_path, resolve_factor_package
 from factor_protocol.protocol import FactorValidationDefinition, resolve_factor_columns
 from factor_protocol.readme import set_acceptance
@@ -1059,6 +1059,7 @@ def _write_canonical_validation(
     sample_dates: Sequence[str] | None = None,
     validator_error: str | None = None,
     persist: bool = True,
+    committed_manifest: Mapping[str, Any] | None = None,
 ) -> tuple[list[Path], list[str], list[dict[str, Any]]]:
     report_columns: list[dict[str, Any]] = []
     try:
@@ -1120,26 +1121,19 @@ def _write_canonical_validation(
     stored["date"] = pd.to_datetime(stored["date"], errors="coerce").dt.date
     stored["code"] = stored["code"].astype(str)
 
-    factor_range = storage.factor_date_range()
-    # The validator narrows the factor scope to the bounded audit sample, but
-    # evaluation needs a fingerprint for the complete requested materialized
-    # interval.  Read the physical partition names directly so a five-day
-    # independent audit does not make a full-history validation look stale.
-    manifest_dates = _partition_dates(
-        storage.factor_root,
-        "1900-01-01",
-        requested_end or end,
-    )
-    manifest_through = (
-        manifest_dates[-1]
-        if manifest_dates
-        else (factor_range[1] if factor_range else (requested_end or end))
-    )
-    source_manifest = dataset_manifest(
-        storage.factor_data_root,
-        storage.factor_name,
-        through=manifest_through,
-    )
+    if committed_manifest is None:
+        factor_range = storage.factor_date_range()
+        manifest_dates = _partition_dates(storage.factor_root, "1900-01-01", requested_end or end)
+        manifest_through = manifest_dates[-1] if manifest_dates else (
+            factor_range[1] if factor_range else (requested_end or end)
+        )
+        source_manifest = dataset_manifest(storage.factor_data_root, storage.factor_name, through=manifest_through)
+    else:
+        source_manifest = {
+            "through": committed_manifest["end"],
+            "maximum_date": committed_manifest["end"],
+            "sha256": committed_manifest["sha256"],
+        }
     outputs: list[Path] = []
     failures: list[str] = []
     evaluation_manifest_cache: dict[str, dict[str, Any]] = {}
@@ -1259,7 +1253,7 @@ def _write_canonical_validation(
             or evaluation.get("stale_reason") == "calculation_fingerprint_changed"
         )
         evaluation_source_changed = False
-        if evaluation:
+        if evaluation and committed_manifest is None:
             source_manifests = evaluation.get("source_manifests")
             stored_evaluation_manifest = (
                 source_manifests.get("factor")
@@ -1382,6 +1376,7 @@ def run_validation(
     readme_path: str | Path | None = None,
     update_readme: bool = True,
     persist: bool = True,
+    daily_update: bool = False,
 ) -> Path:
     """Run a native validator and normalize its output into canonical artifacts."""
 
@@ -1476,15 +1471,24 @@ def run_validation(
             "define_factor_validator or a callable custom validator: "
             f"{package.module_path.as_posix()}"
         )
-    identity = require_identity(
-        resolve_factor_data_root(project_root=root, artifacts_root=artifacts_root) / (storage_factor_name or factor_name),
-        fingerprint=factor_definition_fingerprint(package),
-        columns=(factor_column,)
-        if factor_column is not None
-        else resolve_factor_columns(module),
+    factor_root = resolve_factor_data_root(project_root=root, artifacts_root=artifacts_root) / (
+        storage_factor_name or factor_name
     )
+    fingerprint = factor_definition_fingerprint(package)
+    columns = (factor_column,) if factor_column is not None else resolve_factor_columns(module)
+    if daily_update:
+        identity = read_identity(factor_root)
+        if (identity.get("fingerprint") != fingerprint
+                or not set(columns).issubset(identity.get("columns", ()))):
+            raise ValueError(f"committed factor identity does not match the package: {factor_root}")
+    else:
+        identity = require_identity(factor_root, fingerprint=fingerprint, columns=columns)
     if identity.get("factor_name") != factor_name:
         raise ValueError("factor identity does not match the requested package")
+    committed_manifest = identity.get("manifest") if daily_update else None
+    if daily_update and (not committed_manifest or not committed_manifest.get("sha256")
+                         or committed_manifest.get("end") != end):
+        raise ValueError("daily validation must end at the latest committed factor partition")
     storage = FactorStorage(
         data_root=resolved_data_root,
         project_root=root,
@@ -1605,6 +1609,7 @@ def run_validation(
             requested_end=end,
             sample_dates=sample_dates,
             persist=persist,
+            committed_manifest=committed_manifest,
             validator_error=(
                 f"{type(validation_error).__name__}: {validation_error}"
                 if validation_error is not None
@@ -1785,7 +1790,10 @@ def main(argv: list[str] | None = None) -> int:
         action="store_true",
         help="Update machine validation state without modifying the README.",
     )
+    p.add_argument("--daily-update", action="store_true", help=argparse.SUPPRESS)
     a = p.parse_args(argv)
+    if a.daily_update and (a.sample or not a.no_readme_update):
+        p.error("--daily-update requires committed data and --no-readme-update")
     a.factor_name = FactorStorage.identifier(a.factor_name)
     codes = (
         tuple(x.strip() for x in a.codes.split(",") if x.strip()) if a.codes else None
@@ -1822,6 +1830,7 @@ def main(argv: list[str] | None = None) -> int:
             readme_path=a.readme_path,
             update_readme=not a.no_readme_update,
             persist=not a.sample,
+            daily_update=a.daily_update,
         )
     except Exception as exc:
         if not a.no_readme_update and not isinstance(exc, AssertionError):
