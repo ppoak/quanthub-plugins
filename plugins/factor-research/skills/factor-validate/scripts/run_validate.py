@@ -31,7 +31,6 @@ from factor_protocol.artifacts import (
     dataset_manifest,
     factor_column_output,
     manifest_reference,
-    manifests_match,
     read_config,
     replace_column_directory,
     stage_column_directory,
@@ -1017,27 +1016,6 @@ def _summary_row_for_column(
     }
 
 
-def _evaluation_record(value: Any) -> dict[str, Any]:
-    """Keep the evaluator's canonical sections while refreshing validation."""
-    if not isinstance(value, Mapping):
-        return {}
-    return {
-        key: value[key]
-        for key in (
-            "status",
-            "begin",
-            "requested_end",
-            "completed_at",
-            "stale_reason",
-            "parameters",
-            "resources",
-            "files",
-            "source_manifests",
-        )
-        if key in value
-    }
-
-
 def _write_canonical_validation(
     *,
     storage: FactorStorage,
@@ -1136,7 +1114,6 @@ def _write_canonical_validation(
         }
     outputs: list[Path] = []
     failures: list[str] = []
-    evaluation_manifest_cache: dict[str, dict[str, Any]] = {}
     single_column = len(factor_columns) == 1
     metadata_columns = {
         column
@@ -1245,84 +1222,39 @@ def _write_canonical_validation(
             project_root=project_root,
         )
         payload = read_config(destination / "config.json")
-        evaluation = _evaluation_record(payload.get("evaluation"))
-        previous_factor = payload.get("factor")
-        evaluation_definition_changed = bool(evaluation) and (
-            not isinstance(previous_factor, Mapping)
-            or previous_factor.get("fingerprint") != fingerprint
-            or evaluation.get("stale_reason") == "calculation_fingerprint_changed"
-        )
-        evaluation_source_changed = False
-        if evaluation and committed_manifest is None:
-            source_manifests = evaluation.get("source_manifests")
-            stored_evaluation_manifest = (
-                source_manifests.get("factor")
-                if isinstance(source_manifests, Mapping)
-                else None
-            )
-            through = (
-                stored_evaluation_manifest.get("through")
-                if isinstance(stored_evaluation_manifest, Mapping)
-                else None
-            )
-            if isinstance(through, str):
-                if through not in evaluation_manifest_cache:
-                    evaluation_manifest_cache[through] = dataset_manifest(
-                        storage.factor_data_root,
-                        storage.factor_name,
-                        through=through,
-                    )
-                evaluation_source_changed = not manifests_match(
-                    stored_evaluation_manifest,
-                    evaluation_manifest_cache[through],
-                )
-            else:
-                evaluation_source_changed = True
-        if evaluation and (
-            evaluation_definition_changed or evaluation_source_changed or status != "pass"
-        ):
-            stale_evaluation = dict(evaluation)
-            stale_evaluation["status"] = "stale"
-            stale_evaluation["stale_reason"] = (
-                "calculation_fingerprint_changed"
-                if evaluation_definition_changed
-                else "validation_failed"
-                if status != "pass"
-                else "historical_factor_source_changed"
-            )
-            evaluation = stale_evaluation
-        payload = {
-            "factor": {
-                "name": factor_name,
-                "column": factor_column,
-                "fingerprint": fingerprint,
-                **(
-                    {"dataset": storage.factor_name}
-                    if storage.factor_name != factor_name
-                    else {}
-                ),
-            },
-            "validation": {
-                "status": status,
-                "begin": requested_begin or begin,
-                "end": requested_end or end,
-                "tolerance": tolerance,
-                "relative_tolerance": relative_tolerance,
-                "data": manifest_reference(source_manifest),
-                "completed_at": pd.Timestamp.now(tz="UTC").isoformat(),
-            },
-            **({"evaluation": evaluation} if evaluation else {}),
+        factor = {
+            "name": factor_name,
+            "column": factor_column,
+            **({"dataset": storage.factor_name} if storage.factor_name != factor_name else {}),
+        }
+        validation = {
+            "status": status,
+            "begin": requested_begin or begin,
+            "end": requested_end or end,
+            "tolerance": tolerance,
+            "relative_tolerance": relative_tolerance,
+            "data": manifest_reference(source_manifest),
+            "completed_at": pd.Timestamp.now(tz="UTC").isoformat(),
         }
         if reasons or validator_error:
-            payload["validation"]["error"] = validator_error or ",".join(
-                dict.fromkeys(reasons)
-            )
+            validation["error"] = validator_error or ",".join(dict.fromkeys(reasons))
+        if not payload.get("files") and not payload.get("evaluation"):
+            payload = {"factor": factor}
+        elif any(payload.get("factor", {}).get(key) != value for key, value in factor.items()):
+            raise ValueError(f"existing evaluation identifies another factor: {destination}")
+        snapshot = {"fingerprint": fingerprint, **manifest_reference(source_manifest)}
+        if payload.get("files") and status == "pass" and all(
+            payload["factor"].get(key) == value for key, value in snapshot.items()
+        ):
+            payload.pop("validation", None)
+        else:
+            payload["validation"] = snapshot if status == "pass" else "fail"
         report_columns.append(
             {
                 "factor_column": factor_column,
                 "watermark": source_manifest["maximum_date"],
                 "validation": {
-                    **payload["validation"],
+                    **validation,
                     "sample_begin": begin,
                     "sample_end": end,
                     "metrics": central_summary,
@@ -1334,8 +1266,7 @@ def _write_canonical_validation(
             try:
                 for filename in ("ic.csv", "returns.csv", "correlation.csv"):
                     copy_if_present(destination / filename, staging / filename)
-                if evaluation.get("status") == "complete":
-                    copy_if_present(destination / "overview.png", staging / "overview.png")
+                copy_if_present(destination / "overview.png", staging / "overview.png")
                 audit.to_csv(staging / "audit.csv", index=False)
                 write_config(staging / "config.json", payload)
                 replace_column_directory(staging, destination)

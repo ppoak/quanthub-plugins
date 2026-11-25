@@ -14,9 +14,6 @@ from typing import Any, Iterable, Mapping, Sequence
 import duckdb
 from .check import EVALUATION_FILES, evaluation_files, evaluation_files_match
 from factor_protocol.artifacts import (
-    copy_if_present,
-    dataset_manifest,
-    manifests_match,
     read_config,
     replace_column_directory,
     resolve_output_root,
@@ -51,9 +48,6 @@ __all__ = [
     "Sequence",
     "duckdb",
     "EVALUATION_VARIANTS",
-    "copy_if_present",
-    "dataset_manifest",
-    "manifests_match",
     "read_config",
     "replace_column_directory",
     "resolve_output_root",
@@ -85,10 +79,6 @@ SINGLE_COLUMN_DATE_BATCH_DAYS = 126
 # tens of millions of rows at once and spill the entire drive.
 REFRESH_COLUMN_BATCH_SIZE = 1
 REFRESH_DATE_BATCH_DAYS = 31
-# Reference-only refreshes use the same short date block as normal nightly
-# refreshes.  A wider block multiplies the factor/reference rank panels and
-# can exceed the DuckDB memory limit for wide packages such as chip factors.
-REFERENCE_REFRESH_DATE_BATCH_DAYS = 31
 REFERENCE_CORRELATION_BATCH_SIZE = 4
 PROBE_DATE_DAYS = 20
 
@@ -121,7 +111,6 @@ class EvaluationSettings:
     single_column_date_batch_days: int = SINGLE_COLUMN_DATE_BATCH_DAYS
     refresh_column_batch_size: int = REFRESH_COLUMN_BATCH_SIZE
     refresh_date_batch_days: int = REFRESH_DATE_BATCH_DAYS
-    reference_refresh_date_batch_days: int = REFERENCE_REFRESH_DATE_BATCH_DAYS
     reference_correlation_batch_size: int = REFERENCE_CORRELATION_BATCH_SIZE
     probe_date_days: int = PROBE_DATE_DAYS
 
@@ -192,10 +181,6 @@ class EvaluationSettings:
             refresh_date_batch_days=integer(
                 "FACTOR_EVALUATE_REFRESH_DATE_BATCH_DAYS", REFRESH_DATE_BATCH_DAYS
             ),
-            reference_refresh_date_batch_days=integer(
-                "FACTOR_EVALUATE_REFERENCE_REFRESH_DATE_BATCH_DAYS",
-                REFERENCE_REFRESH_DATE_BATCH_DAYS,
-            ),
             reference_correlation_batch_size=integer(
                 "FACTOR_EVALUATE_REFERENCE_CORRELATION_BATCH_SIZE",
                 REFERENCE_CORRELATION_BATCH_SIZE,
@@ -221,7 +206,6 @@ class EvaluationSettings:
             "single_column_date_batch_days": self.single_column_date_batch_days,
             "refresh_column_batch_size": self.refresh_column_batch_size,
             "refresh_date_batch_days": self.refresh_date_batch_days,
-            "reference_refresh_date_batch_days": self.reference_refresh_date_batch_days,
             "reference_correlation_batch_size": self.reference_correlation_batch_size,
             "probe_date_days": self.probe_date_days,
         }
@@ -312,24 +296,6 @@ _RETURNS_SQL_TYPES = {
     "observations": "BIGINT",
     "top_holdings": "BIGINT",
     "top_observations": "BIGINT",
-}
-_EMPTY_METRIC_TYPES = {
-    "ic": (
-        ("date", "DATE"),
-        ("variant", "VARCHAR"),
-        ("ic", "DOUBLE"),
-        ("observations", "BIGINT"),
-    ),
-    "returns": tuple(
-        (column, _RETURNS_SQL_TYPES.get(column, "DOUBLE")) for column in RETURNS_COLUMNS
-    ),
-    "correlation": (
-        ("date", "DATE"),
-        ("variant", "VARCHAR"),
-        ("reference_factor", "VARCHAR"),
-        ("correlation", "DOUBLE"),
-        ("observations", "BIGINT"),
-    ),
 }
 _STAGE_TABLE_DEFINITIONS = {
     "_evaluation_ic": (
@@ -432,6 +398,7 @@ class EvaluationConfig:
     tasks: tuple[str, ...] = ("ic", "portfolio", "correlation")
     rebuild: bool = False
     daily_update: bool = False
+    factor_fingerprint: str | None = None
     project_root: str | Path | None = None
     settings: EvaluationSettings | None = None
 
@@ -440,6 +407,8 @@ class EvaluationConfig:
             raise ValueError("direction must be positive, negative or auto")
         if not self.tasks or set(self.tasks) - {"ic", "portfolio", "correlation"}:
             raise ValueError("tasks must select ic, portfolio or correlation")
+        if self.daily_update and (self.rebuild or set(self.tasks) != {"ic", "portfolio", "correlation"}):
+            raise ValueError("daily evaluation requires a complete incremental refresh")
         if self.factor_data is not None:
             if self.factor_name is not None or self.storage_factor_name is not None:
                 raise ValueError("factor_data cannot be combined with a package or storage name")
@@ -505,9 +474,12 @@ class _ColumnState:
     factor_column: str
     output_dir: Path
     config: dict[str, Any]
-    cutoff: str
+    cutoffs: dict[str, str]
     incremental: bool
-    reference_refresh: bool = False
+
+    @property
+    def cutoff(self) -> str:
+        return min(self.cutoffs.values())
 
 
 def _chunks(values: Sequence[Any], size: int) -> Iterable[Sequence[Any]]:
@@ -553,14 +525,6 @@ def _partition_dates(root: Path) -> list[str]:
 
 def _sql_list(storage: FactorStorage, values: Sequence[str]) -> str:
     return ", ".join(storage.sql_literal(value) for value in values)
-
-
-def _empty_metric_query(metric: str) -> str:
-    columns = _EMPTY_METRIC_TYPES[metric]
-    selected = ", ".join(
-        f"CAST(NULL AS {sql_type}) AS {column}" for column, sql_type in columns
-    )
-    return f"SELECT {selected} WHERE FALSE"
 
 
 def print_progress(label: str, completed: int, total: int, started: float, *, failed: int = 0) -> None:

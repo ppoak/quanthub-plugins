@@ -175,7 +175,11 @@ def refresh_evaluation(cfg: UpdateConfig, *, end: str) -> None:
         arguments.extend(("--storage-factor-name", cfg.storage_factor_name))
     for operation in ("evaluate", "check", "plot"):
         arguments.extend(("--operation", operation))
-    run_skill_script(root, "factor-evaluate", "run_evaluate.py", arguments)
+    try:
+        run_skill_script(root, "factor-evaluate", "run_evaluate.py", arguments, capture_output=True)
+    except subprocess.CalledProcessError as exc:
+        detail = (exc.output or "").strip().splitlines()
+        raise ValueError(detail[-1] if detail else str(exc)) from exc
 
 
 def write_readme(cfg: UpdateConfig) -> None:

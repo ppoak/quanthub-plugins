@@ -71,7 +71,7 @@ def refresh_outputs(cfg: UpdateConfig, plan: UpdatePlan) -> tuple[list[str], boo
         messages.append("validation=skipped_no_updated_output")
     if cfg.refresh_evaluation and not failed:
         try:
-            refresh_evaluation(cfg, end=plan.end)
+            refresh_evaluation(cfg, end=min(plan.end, dates[-1]))
             messages.append("evaluation_refresh=completed")
         except Exception as exc:
             failed = True

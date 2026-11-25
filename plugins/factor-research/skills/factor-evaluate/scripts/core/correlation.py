@@ -242,15 +242,6 @@ class _CorrelationMixin:
             block_begin=block_begin,
             block_end=block_end,
         )
-        # Include checked dates even when the correlation has too few pairs.
-        for column, day in self.storage.execute(
-            "SELECT factor_column, MAX(date) FROM _ranked_positions "
-            "WHERE date BETWEEN CAST(? AS DATE) AND CAST(? AS DATE) GROUP BY factor_column",
-            [block_begin, block_end],
-        ).fetchall():
-            self._correlation_through[column] = max(
-                self._correlation_through.get(column, ""), day.isoformat()
-            )
 
 
     def _insert_correlations_from(
@@ -263,13 +254,13 @@ class _CorrelationMixin:
         if not self.reference_factors:
             return
         candidates = self.storage.identifier(candidate_relation)
-        needs_cutoff = self._block_requires_cutoff(block_begin)
+        needs_cutoff = self._block_requires_cutoff(block_begin, "correlation")
         cutoff_join = (
             "JOIN _evaluation_cutoffs cutoff USING (factor_column)"
             if needs_cutoff
             else ""
         )
-        cutoff_filter = "AND candidate.date >= cutoff.cutoff" if needs_cutoff else ""
+        cutoff_filter = "AND candidate.date >= cutoff.correlation" if needs_cutoff else ""
         reference_ids = tuple(reference_id for reference_id, _ in self._reference_labels)
         batches = tuple(
             tuple(batch)

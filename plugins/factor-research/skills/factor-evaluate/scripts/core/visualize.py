@@ -6,7 +6,7 @@ of ``factor-protocol`` and never changes canonical CSV or JSON artifacts.
 
 from __future__ import annotations
 
-from .check import evaluation_files_match
+from .check import evaluation_config, evaluation_files_match
 
 import json
 from pathlib import Path
@@ -60,7 +60,7 @@ def _parse_date(value: str | None, *, label: str) -> pd.Timestamp | None:
 
 def _read_config(path: Path) -> dict:
     try:
-        return json.loads(path.read_text(encoding="utf-8"))
+        return evaluation_config(json.loads(path.read_text(encoding="utf-8")))
     except (OSError, json.JSONDecodeError) as exc:
         raise ValueError(f"cannot read evaluation config: {path}") from exc
 
@@ -70,9 +70,8 @@ def _infer_test_window(
     frames: Iterable[pd.DataFrame],
 ) -> tuple[pd.Timestamp, pd.Timestamp]:
     frames = tuple(frames)
-    evaluation = config.get("evaluation", {})
-    evaluation_begin = _parse_date(evaluation.get("begin"), label="evaluation begin")
-    parameters = evaluation.get("parameters", {})
+    parameters = config["parameters"]
+    evaluation_begin = _parse_date(parameters["begin"], label="evaluation begin")
     begin_exclusive = _parse_date(parameters.get("validation_end"), label="test begin")
     begin = (
         begin_exclusive + pd.Timedelta(days=1) if begin_exclusive is not None else None
@@ -115,8 +114,7 @@ def _load_inputs(
     _require_columns(returns, REQUIRED_RETURN_COLUMNS, "returns.csv")
     _require_columns(correlation, REQUIRED_CORRELATION_COLUMNS, "correlation.csv")
     config = _read_config(column_dir / "config.json")
-    evaluation = config.get("evaluation", {})
-    if evaluation.get("status") != "complete" or not evaluation_files_match(column_dir, evaluation):
+    if not evaluation_files_match(column_dir, config):
         raise ValueError("overview requires complete matching metric files")
     for frame in (ic, returns, correlation):
         frame["date"] = pd.to_datetime(frame["date"], errors="coerce").dt.normalize()
@@ -562,7 +560,7 @@ def render(*, project_root, factor_name=None, factor_column=None, output_dir="ar
     if begin > end:
         raise ValueError("test-begin must not be later than test-end")
     horizon_days = int(
-        config.get("evaluation", {}).get("parameters", {}).get("horizon_days", 5)
+        config["parameters"]["horizon_days"]
     )
     figure = build_figure(
         column=column,

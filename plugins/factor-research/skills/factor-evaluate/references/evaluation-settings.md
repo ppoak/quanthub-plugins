@@ -41,10 +41,9 @@
 | `FACTOR_EVALUATE_SINGLE_COLUMN_DATE_BATCH_DAYS` | `126` | 单列自动计算的默认交易日批次上限。 |
 | `FACTOR_EVALUATE_REFRESH_COLUMN_BATCH_SIZE` | `1` | 增量刷新使用的列批次大小。 |
 | `FACTOR_EVALUATE_REFRESH_DATE_BATCH_DAYS` | `31` | 增量刷新使用的交易日批次大小。 |
-| `FACTOR_EVALUATE_REFERENCE_REFRESH_DATE_BATCH_DAYS` | `31` | 仅刷新参考因子相关性时使用的交易日批次大小。 |
 | `FACTOR_EVALUATE_REFERENCE_CORRELATION_BATCH_SIZE` | `4` | 每个相关性批次处理的参考因子数。 |
 | `FACTOR_EVALUATE_PROBE_DATE_DAYS` | `20` | 自动估算内存批次时抽取的样本交易日数。 |
 
 `DATE_BATCH_DAYS` 与相关批次变量都按 `quotes_day` 中的交易日计数。显式设置 `COLUMN_BATCH_SIZE` 或 `DATE_BATCH_DAYS` 会覆盖自动批次选择；对应命令行参数也可逐次覆盖 `.env` 配置。
 
-日期区间、收益周期、价格列、分层和中性化设置会写入每列 `config.json`，以便追溯评估口径；实际批次、线程和内存配置也会记录在资源信息中。
+日期区间、收益周期、价格列、分层和中性化设置会写入每列 `config.json`，以便追溯评估口径。

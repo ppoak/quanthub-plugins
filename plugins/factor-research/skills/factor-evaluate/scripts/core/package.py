@@ -9,8 +9,7 @@ from factor_protocol.identity import read_identity, require_identity
 from factor_protocol.protocol import resolve_factor_columns
 from factor_protocol.registry import load_core_factor_references
 from .validation import require_validation
-from .validation import check_package_evaluation as check_evaluation_config
-from .check import check_evaluation_config as check_metrics
+from .check import evaluation_config
 
 DEFAULT_REFERENCE_FACTOR = "barra_cne5_styles"
 
@@ -76,7 +75,8 @@ def run_package_evaluation(cfg):
     references = cfg.reference_factors if cfg.daily_update else _resolve_reference_factors(
         cfg.reference_factors, project_root=root, factor_zoo_root=cfg.factor_zoo_root
     )
-    return run_evaluation(replace(cfg, factor_columns=columns, reference_factors=references))
+    return run_evaluation(replace(cfg, factor_columns=columns, reference_factors=references,
+                                  factor_fingerprint=identity["fingerprint"]))
 
 
 def refresh_evaluations(
@@ -106,7 +106,6 @@ def refresh_evaluations(
     )
     factor_source = storage_factor_name or factor_name
     destination = resolve_output_root(output_root, project_root=root) / factor_name
-    manifest_cache: dict[tuple[str, str], dict[str, Any]] = {}
     groups: dict[tuple[Any, ...], list[str]] = {}
     package = resolve_factor_package(
         factor_name,
@@ -124,7 +123,7 @@ def refresh_evaluations(
         raise ValueError("factor identity does not match the requested package")
     for column in factor_columns:
         column_dir = destination / column
-        config = read_config(column_dir / "config.json")
+        config = evaluation_config(read_config(column_dir / "config.json"))
         factor = config.get("factor")
         if isinstance(factor, Mapping) and (
             factor.get("name") != factor_name
@@ -134,63 +133,20 @@ def refresh_evaluations(
             raise ValueError(
                 f"evaluation config identifies another factor output: {column_dir}"
             )
-        if isinstance(factor, Mapping) and (
-            not factor.get("fingerprint")
-            or factor.get("fingerprint") != identity["fingerprint"]
-        ):
-            raise ValueError(
-                f"validation calculation fingerprint is missing or stale: {column_dir}; "
-                "run validate again"
-            )
-        evaluation = config.get("evaluation")
-        evaluation = evaluation if isinstance(evaluation, Mapping) else {}
+        parameters = config.get("parameters") or {}
         if daily_update:
-            if evaluation.get("status") != "complete":
-                raise ValueError(f"daily update requires complete evaluation results: {column_dir}")
-            stored_settings = {**evaluation.get("parameters", {}), "begin": evaluation.get("begin")}
+            if not config.get("files"):
+                raise ValueError(f"daily update requires complete evaluation results: {column_dir}; run Evaluate")
+            if factor.get("fingerprint") != identity["fingerprint"]:
+                raise ValueError(f"calculation fingerprint changed: {column_dir}; rebuild evaluation")
             for key, value in daily_parameters.items():
-                if stored_settings.get(key) != value:
+                if parameters.get(key) != value:
                     raise ValueError(f"daily update cannot change evaluation parameter {key}: {column_dir}")
-            previous_end = evaluation.get("requested_end")
-            if not isinstance(previous_end, str) or end is None or previous_end > end:
-                raise ValueError(f"invalid daily evaluation end: {column_dir}")
-            if previous_end == end:
-                check_metrics(column_dir, factor_name=factor_name, factor_source=factor_source,
-                              data_root=resolved_data_root, project_root=root, end=end, verify_sources=False)
-                continue
-        elif end is not None:
-            try:
-                checked = check_evaluation_config(
-                    column_dir,
-                    factor_name=factor_name,
-                    factor_source=factor_source,
-                    data_root=resolved_data_root,
-                    project_root=root,
-                    manifest_cache=manifest_cache,
-                )
-            except (OSError, ValueError):
-                pass
-            else:
-                previous_end = str(
-                    checked["evaluation"]["requested_end"]
-                )
-                if previous_end > end:
-                    raise ValueError(
-                        f"evaluation requested end is later than the refresh target: "
-                        f"{column_dir}"
-                    )
-                if previous_end == end:
-                    continue
-                # The existing evaluation is valid through the previous
-                # requested end. Keep its configuration and let the engine
-                # append only the dates missing from the stored metrics.
-        parameters = evaluation.get("parameters")
-        parameters = parameters if isinstance(parameters, Mapping) else {}
         references = tuple(
             str(value) for value in parameters.get("reference_factors", ())
         )
         key = (
-            evaluation.get("begin", settings.begin),
+            parameters.get("begin", settings.begin),
             str(parameters.get("train_end", settings.train_end)),
             str(parameters.get("validation_end", settings.validation_end)),
             int(parameters.get("horizon_days", settings.horizon_days)),
@@ -240,7 +196,7 @@ def refresh_evaluations(
                 reference_factors=tuple(references),
                 end=end,
                 factor_columns=tuple(columns),
-                data_root=data_root,
+                data_root=resolved_data_root,
                 output_dir=output_root,
                 factor_zoo_root=factor_zoo_root,
                 threads=threads,

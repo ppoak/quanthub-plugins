@@ -65,8 +65,8 @@ uv run --locked python "<path-to-skill>/scripts/run_evaluate.py" --factor-data a
 ## 注意事项
 
 - 日期须满足 `begin <= train_end < validation_end < end`。收益未能在对应区间内实现的记录不参与统计，不填零。
-- 直接评分的结果保存到 `<output-dir>/<column>/`，默认目录为 `$ARTIFACTS/factor_evaluation`；不同实验分别指定 `--output-dir`。因子包默认保存到 `$ARTIFACTS/factor_zoo/<name>/<column>/`。文件说明见[评估产物](references/evaluation-artifacts.md)。单项计算只更新自己的 CSV；三项的日期、参数和数据一致才标为 `complete`，否则为 `partial`，不能完整验收或绘图。
-- `--refresh` 仅用于单个因子包，沿用已有设置刷新全部声明列，不能与 `--task`、`--factor-column` 或 `--rebuild` 混用。需要按当前参数重新计算时用 `--rebuild`。
+- 直接评分的结果保存到 `<output-dir>/<column>/`，默认目录为 `$ARTIFACTS/factor_evaluation`。因子包默认保存到 `$ARTIFACTS/factor_zoo/<name>/<column>/`。完整评估一起提交三份 CSV 和配置。单项任务可补齐同一数据和参数下的结果，不能覆盖因子包默认目录里的完整结果。文件说明见[评估产物](references/evaluation-artifacts.md)。
+- `--refresh` 仅用于单个因子包，沿用已有设置刷新全部声明列，不能与 `--task`、`--factor-column` 或 `--rebuild` 混用。日更时，三项指标各自从 CSV 最后一个实际结果日续算。需要按当前参数重建时，用独立的 `--rebuild`。
 - 直接评分不能使用 `readme` 或 `--refresh`。是否采用或发布因子由用户判断。
 - `--factor-data` 的相对路径以 `--project-root` 为基准。评估只读取评分目录；单独检查或绘图时沿用相同输入和输出目录。
 
@@ -76,6 +76,6 @@ uv run --locked python "<path-to-skill>/scripts/run_evaluate.py" --factor-data a
 
 - 代码、数据或验证记录不一致：核对包名与目录；按原因重新 Calculate 或 Validate 后再评估。
 - 日期不足或缺少输入：检查行情、行业、参考因子及评估区间，行情需覆盖收益退出日。
-- 结果为 `partial`、文件缺失或数据已变化：统一参数和区间，补算所缺任务，必要时用 `--rebuild` 重算。
+- 结果缺失、文件损坏或计算口径变化：根据报错恢复结果，或用 `--rebuild` 重建。日更会报告原因。
 - 内存或临时空间不足：降低 `--workers`、`--threads` 或批次大小，检查临时目录空间。
 - 绘图或 README 更新失败：先用 `--operation check` 检查结果，再核对绘图依赖、总览图、README 模板标记和文件写入权限。

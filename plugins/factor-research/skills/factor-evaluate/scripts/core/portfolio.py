@@ -65,14 +65,14 @@ class _PortfolioMixin:
 
 
     def _insert_returns(self, block_begin: str, block_end: str) -> None:
-        needs_cutoff = self._block_requires_cutoff(block_begin)
+        needs_cutoff = self._block_requires_cutoff(block_begin, "returns")
         cutoff_join = (
             "JOIN _evaluation_cutoffs cutoff USING (factor_column)"
             if needs_cutoff
             else ""
         )
         cutoff_filter = (
-            "AND layer_metrics.date >= cutoff.cutoff"
+            "AND layer_metrics.date >= cutoff.returns"
             if needs_cutoff
             else ""
         )

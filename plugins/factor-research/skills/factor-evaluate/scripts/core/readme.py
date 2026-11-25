@@ -96,7 +96,7 @@ def _local_date(value: str) -> str:
 
 def _watermark(payload: Mapping[str, Any], column_dir: Path) -> str:
     filenames = ["ic.csv", "returns.csv"]
-    if payload["evaluation"]["parameters"].get("reference_factors"):
+    if payload["parameters"].get("reference_factors"):
         filenames.append("correlation.csv")
     dates: list[str] = []
     with duckdb.connect(":memory:", config={"threads": 1}) as connection:
@@ -235,22 +235,13 @@ def _test_metrics(
 
 
 def _evaluation_scope(payload: Mapping[str, Any]) -> tuple[dict[str, Any], str]:
-    evaluation = payload["evaluation"]
-    parameters = evaluation.get("parameters")
-    if not isinstance(parameters, dict) or not all(
-        isinstance(parameters.get(key), str) for key in ("train_end", "validation_end")
-    ):
-        raise IncompleteEvaluationArtifacts(
-            "evaluation config has incomplete period parameters"
-        )
-    sources = evaluation.get("source_manifests")
-    if not isinstance(sources, dict) or not sources:
-        raise IncompleteEvaluationArtifacts("evaluation config has no source snapshots")
+    parameters = payload["parameters"]
+    factor = payload["factor"]
     signature = {
-        "begin": evaluation.get("begin"),
-        "requested_end": evaluation.get("requested_end"),
+        "begin": parameters["begin"],
         "parameters": parameters,
-        "source_manifests": sources,
+        "through": factor["through"],
+        "sha256": factor["sha256"],
     }
     return signature, parameters["validation_end"]
 
@@ -278,14 +269,14 @@ def _make_row(
     validation_end: str,
     connection: duckdb.DuckDBPyConnection,
 ) -> list[str]:
-    evaluation = payload["evaluation"]
+    parameters = payload["parameters"]
     selection = selection_details(
         read_selection_rows(
             connection,
             _csv_path(output_root, factor_name, column, "ic.csv"),
             column,
-            evaluation["parameters"],
-            str(evaluation["begin"]),
+            parameters,
+            parameters["begin"],
         ),
         column,
     )
@@ -304,10 +295,10 @@ def _make_row(
         variant=selected_variant,
         validation_end=validation_end,
         watermark=watermark,
-        has_references=bool(evaluation.get("parameters", {}).get("reference_factors")),
+        has_references=bool(parameters.get("reference_factors")),
     )
-    interval_begin = str(evaluation.get("begin") or "—")
-    completed_at = str(evaluation["completed_at"])
+    interval_begin = parameters["begin"]
+    completed_at = payload["completed_at"]
     test_date = _local_date(completed_at)
     cells: list[Any] = [
         test_date,

@@ -145,7 +145,9 @@ def _validation_artifact_state(
     root = resolve_output_root(output_root, project_root=project_root) / factor_name
     factor_source = storage_factor_name or factor_name
     factor_data = resolve_factor_data_root(project_root=project_root)
-    fingerprint = read_identity(factor_data / factor_source).get("fingerprint")
+    identity = read_identity(factor_data / factor_source)
+    fingerprint = identity.get("fingerprint")
+    manifest = identity.get("manifest", {})
     states: list[tuple[str, str]] = []
     for column in factor_columns:
         path = root / column / "config.json"
@@ -166,26 +168,28 @@ def _validation_artifact_state(
             or factor.get("name") != factor_name
             or factor.get("column") != column
             or factor.get("dataset", factor_name) != factor_source
-            or not factor.get("fingerprint")
-            or factor.get("fingerprint") != fingerprint
         ):
             states.append((column, "factor_identity_mismatch"))
             continue
         validation = payload.get("validation")
-        if not isinstance(validation, dict):
-            states.append((column, "missing_validation"))
-            continue
-        status = str(validation.get("status") or "unknown")
-        end = str(validation.get("end") or "")
+        if isinstance(validation, dict) and "status" in validation:
+            proof = ({"fingerprint": factor.get("fingerprint"), **validation.get("data", {})}
+                     if validation["status"] == "pass" else {})
+        elif validation is None:
+            proof = factor if payload.get("files") else {}
+        else:
+            proof = validation if isinstance(validation, dict) else {}
         audit_path = path.parent / "audit.csv"
         if not audit_path.is_file() or audit_path.stat().st_size == 0:
             states.append((column, "missing_audit"))
-        if status != "pass":
-            states.append((column, f"status={status}"))
-        if not end:
-            states.append((column, "missing_validation_end"))
-        elif end < source_end:
-            states.append((column, f"stale_end={end}"))
+        if not proof:
+            states.append((column, "missing_passing_validation"))
+        elif proof.get("fingerprint") != fingerprint:
+            states.append((column, "validation_fingerprint_mismatch"))
+        elif not proof.get("through") or proof["through"] < source_end:
+            states.append((column, f"stale_end={proof.get('through')}"))
+        elif proof["through"] != manifest.get("end") or proof.get("sha256") != manifest.get("sha256"):
+            states.append((column, "validation_snapshot_mismatch"))
     if not states:
         return None
     if any(

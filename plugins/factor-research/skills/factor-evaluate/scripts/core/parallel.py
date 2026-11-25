@@ -102,18 +102,17 @@ def _new_engine(
     )
 
 
-def _prepare_engine(engine: _EvaluationEngine) -> tuple[dict[str, Any], list[str]]:
+def _prepare_engine(engine: _EvaluationEngine) -> list[str]:
     engine._validate_quote_schema()
     engine._validate_industry_schema()
-    manifest = engine._manifest(engine.factor_source, engine.end)
-    engine._states = engine._column_states(manifest)
+    engine._states = engine._column_states()
     engine._create_calendar()
     process_begin = max(
         min(state.cutoff for state in engine._states),
         engine.factor_range[0],
     )
-    process_dates = [date for date in engine.signal_dates if date >= process_begin]
-    return manifest, process_dates
+    process_dates = [date for date in engine.signal_dates if process_begin <= date <= engine.mature_end]
+    return process_dates
 
 
 def _prepare_worker_engine(
@@ -129,7 +128,7 @@ def _prepare_worker_engine(
             factor_column=engine.factor_columns[0],
             output_dir=workspace,
             config={},
-            cutoff=cutoff,
+            cutoffs={metric: cutoff for metric in ("ic", "returns", "correlation")},
             incremental=False,
         ),
     )
@@ -163,7 +162,7 @@ def _prepare_candidate_panel(
             factor_columns=factor_columns,
             reference_factors=(),
         )
-        _manifest, process_dates = _prepare_engine(engine)
+        process_dates = _prepare_engine(engine)
         if not process_dates:
             raise ValueError(
                 "parallel evaluation range contains no materialized factor dates"
@@ -1025,8 +1024,6 @@ def _run_jobs(
 
 def _merge_shards(
     *,
-    candidate_glob: str,
-    process_dates: Sequence[str],
     cfg: EvaluationConfig,
     project_root: Path,
     factor_source: str,
@@ -1061,12 +1058,6 @@ def _merge_shards(
         )
         engine._create_stage_tables()
         metric_paths = shards[0]
-        last_checked = storage.execute(
-            "SELECT MAX(date) FROM read_parquet(?) WHERE date BETWEEN CAST(? AS DATE) AND CAST(? AS DATE)",
-            [candidate_glob, process_dates[0], process_dates[-1]],
-        ).fetchone()[0]
-        if last_checked is not None:
-            engine._correlation_through[factor_columns[0]] = last_checked.isoformat()
         storage.execute(
             "INSERT INTO _evaluation_ic SELECT * FROM read_parquet("
             f"{storage.sql_literal(metric_paths[0].as_posix())})"
@@ -1173,8 +1164,6 @@ def run_parallel_single_column_evaluation(
             launch=launch,
         )
         return _merge_shards(
-            candidate_glob=candidate_glob,
-            process_dates=process_dates,
             cfg=cfg,
             project_root=project_root,
             factor_source=factor_source,

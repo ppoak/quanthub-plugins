@@ -37,12 +37,12 @@ class _EvaluationComputeMixin(_IcMixin, _PortfolioMixin, _CorrelationMixin):
                 stored_selection_rows,
             )
         for state in self._states:
-            if not state.incremental or state.cutoff > self.end:
+            if not state.incremental or state.cutoffs["returns"] > self.mature_end:
                 continue
             path = state.output_dir / "returns.csv"
             literal = self.storage.sql_literal(path.as_posix())
             column_literal = self.storage.sql_literal(state.factor_column)
-            cutoff_literal = self.storage.sql_literal(state.cutoff)
+            cutoff_literal = self.storage.sql_literal(state.cutoffs["returns"])
             self.storage.execute(
                 f"""
                 INSERT INTO _layer_nav_seed
@@ -86,18 +86,20 @@ class _EvaluationComputeMixin(_IcMixin, _PortfolioMixin, _CorrelationMixin):
             except duckdb.Error:
                 pass
 
-    def _block_requires_cutoff(self, block_begin: str) -> bool:
+    def _block_requires_cutoff(self, block_begin: str, metric: str) -> bool:
         """Whether this block still contains rows before a column cutoff."""
 
-        if self._reference_refresh_active:
-            return False
         active = set(self._active_factor_batch)
         states = (
             state
             for state in self._states
             if not active or state.factor_column in active
         )
-        return any(state.cutoff > block_begin for state in states)
+        return any(state.cutoffs[metric] > block_begin for state in states)
+
+    def _block_has_metric(self, metric: str, columns: Sequence[str], end: str) -> bool:
+        return any(state.cutoffs[metric] <= end for state in self._states
+                   if state.factor_column in columns)
 
     def _prepare_shared_forward_returns(
         self,
@@ -354,7 +356,7 @@ class _EvaluationComputeMixin(_IcMixin, _PortfolioMixin, _CorrelationMixin):
         context_begin = self._context_begin(dates[0])
         try:
             self._create_forward_block(context_begin, dates[-1])
-            if "correlation" in self.tasks:
+            if "correlation" in self.tasks and self._block_has_metric("correlation", columns, dates[-1]):
                 self._create_reference_block(context_begin, dates[-1])
             self._process_column_batch_with_retry(
                 tuple(columns),
@@ -387,7 +389,7 @@ class _EvaluationComputeMixin(_IcMixin, _PortfolioMixin, _CorrelationMixin):
         )
         try:
             self._prepare_shared_forward_returns(dates[0], dates[-1])
-            if "correlation" in self.tasks:
+            if "correlation" in self.tasks and self._block_has_metric("correlation", columns, dates[-1]):
                 self._prepare_reference_sources(self._context_begin(dates[0]), dates[-1])
             self._create_factor_batch(columns, dates[0], dates[-1])
             self._prepare_factor_variants(
@@ -777,10 +779,10 @@ class _EvaluationComputeMixin(_IcMixin, _PortfolioMixin, _CorrelationMixin):
             """
         )
         self._create_ranked_positions()
-        if "ic" in self.tasks or "portfolio" in self.tasks:
+        if ("ic" in self.tasks or "portfolio" in self.tasks) and self._block_has_metric("ic", columns, block_end):
             self._insert_ic(block_begin, block_end)
-        if "portfolio" in self.tasks:
+        if "portfolio" in self.tasks and self._block_has_metric("returns", columns, block_end):
             self._create_position_tables()
             self._insert_returns(block_begin, block_end)
-        if "correlation" in self.tasks:
+        if "correlation" in self.tasks and self._block_has_metric("correlation", columns, block_end):
             self._insert_correlations(block_begin, block_end)
