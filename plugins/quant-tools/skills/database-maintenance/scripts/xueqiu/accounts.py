@@ -14,7 +14,7 @@ from pathlib import Path
 ACCOUNT_PREFIX = "XUEQIU_ACCOUNT_"
 LEGACY_KEYS = {
     "XUEQIU_TOKENS", "XUEQIU_TOKEN", "XUEQIU_LOGIN_PHONES", "XUEQIU_LOGIN_EMAILS",
-    "XUEQIU_CLASH_NODE_INDICES", "XUEQIU_USER_AGENTS", "XUEQIU_DEVICE_IDS",
+    "XUEQIU_CLASH_NODE_INDICES",
 }
 
 
@@ -25,8 +25,6 @@ class XueqiuAccount:
     qr_email: str
     node_index: int | None
     token: str = field(repr=False)
-    user_agent: str | None = None
-    device_id: str | None = None
 
     @property
     def key(self) -> str:
@@ -40,7 +38,7 @@ def _parse_accounts(lines: list[str]) -> dict[str, XueqiuAccount]:
         key = key.strip()
         if not separator or not key or key.startswith("#"):
             continue
-        if key in entries and key.startswith((ACCOUNT_PREFIX, "XUEQIU_USER_AGENT_", "XUEQIU_DEVICE_ID_")):
+        if key in entries and key.startswith(ACCOUNT_PREFIX):
             raise ValueError(f"Duplicate Xueqiu configuration key: {key}")
         value = value.strip()
         if len(value) >= 2 and value[0] in {"'", '"'} and value[-1] == value[0]:
@@ -70,8 +68,6 @@ def _parse_accounts(lines: list[str]) -> dict[str, XueqiuAccount]:
         tokens.add(token)
         accounts[account_id] = XueqiuAccount(
             account_id, phone, email, int(node) if node else None, token,
-            entries.get(f"XUEQIU_USER_AGENT_{account_id}") or None,
-            entries.get(f"XUEQIU_DEVICE_ID_{account_id}") or None,
         )
     if not accounts and any(entries.get(key) or os.environ.get(key) for key in LEGACY_KEYS):
         raise ValueError("Migrate the legacy Xueqiu lists to XUEQIU_ACCOUNT_<ID> records")

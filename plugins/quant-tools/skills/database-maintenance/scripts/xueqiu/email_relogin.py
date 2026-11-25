@@ -32,7 +32,7 @@ if str(SKILL_ROOT) not in sys.path:
 
 from scripts.common.scheduler import load_env_file, record_task_output
 from scripts.xueqiu.accounts import XueqiuAccount, load_accounts, replace_account_token
-from scripts.xueqiu.client import ClashNodeSwitcher, build_clash_switcher
+from scripts.xueqiu.client import DEFAULT_USER_AGENT, ClashNodeSwitcher, build_clash_switcher
 
 
 AUTH_ROOT = Path(".tmp/database-maintenance/xueqiu-auth")
@@ -221,13 +221,12 @@ def _identity_payload(status: int, payload: object) -> dict:
 
 
 def _request_json(
-    url: str, token: str, *, proxy: str | None, timeout: float, account: XueqiuAccount,
+    url: str, token: str, *, proxy: str | None, timeout: float,
 ) -> dict:
     request = urllib.request.Request(
         url,
         headers={
-            "User-Agent": account.user_agent or "Xueqiu iPhone 14.91",
-            **({"x-device-id": account.device_id} if account.device_id else {}),
+            "User-Agent": DEFAULT_USER_AGENT,
             "Accept": "application/json",
             "Cookie": f"xq_a_token={token};xq-dj-token={token};xq_is_login=1",
         },
@@ -284,7 +283,7 @@ def verify_token_account(
     token = account.token if candidate_token is None else candidate_token
 
     def request_json(url: str) -> dict:
-        return _request_json(url, token, proxy=proxy, timeout=_request_timeout(timeout, deadline), account=account)
+        return _request_json(url, token, proxy=proxy, timeout=_request_timeout(timeout, deadline))
 
     route = clash_switcher.route(account) if clash_switcher else nullcontext()
     with route:
@@ -517,7 +516,6 @@ def playwright_relogin(
                 channel="chrome",
                 headless=False,
                 proxy={"server": proxy} if proxy else None,
-                **({"user_agent": account.user_agent} if account.user_agent else {}),
             )
         except Exception as exc:
             raise ReloginFailed(f"Launching the browser profile failed ({type(exc).__name__})") from exc

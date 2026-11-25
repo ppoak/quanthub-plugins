@@ -20,19 +20,17 @@
 # 手机号,二维码收件邮箱,Clash 节点编号,Token
 XUEQIU_ACCOUNT_0650='13800000650,a@example.com,2,token_a'
 XUEQIU_ACCOUNT_B='13800000002,b@example.com,,'
-XUEQIU_USER_AGENT_0650='Xueqiu iPhone 14.91'
-XUEQIU_DEVICE_ID_0650=<device-id>
 XUEQIU_PROXY=http://127.0.0.1:7890
 XUEQIU_CLASH_CONTROLLER=http://127.0.0.1:<controller-port>
 XUEQIU_CLASH_SECRET=<controller-secret>
 XUEQIU_CLASH_GROUP=GLOBAL
 ```
 
-ID 使用大写字母、数字或下划线。手机号和邮箱必填，节点是从零开始的编号，留空时走默认代理路由。Token 留空时，该账号可用二维码续登，取得 Token 后才参与采集。只按前三个英文逗号拆分账号记录，Token 中其余逗号原样保留。User-Agent 和设备 ID 可用相同 ID 单独配置。状态和评论分页始终使用同一账号。
+ID 使用大写字母、数字或下划线。手机号和邮箱必填，节点是从零开始的编号，留空时走默认代理路由。Token 留空时，该账号可用二维码续登，取得 Token 后才参与采集。只按前三个英文逗号拆分账号记录，Token 中其余逗号原样保留。状态和评论分页始终使用同一账号。
 
 ### 从旧配置迁移
 
-1. 核对每个手机号实际对应的邮箱、节点和 Token，再按上述格式把这些字段写入同一条账号记录。沿用同一 ID 配置可选的 User-Agent 和设备 ID。
+1. 核对每个手机号实际对应的邮箱、节点和 Token，再按上述格式把这些字段写入同一条账号记录。
 2. 从项目 `.env` 移除旧的手机号、邮箱、Token、节点及请求身份并行列表。保留共享代理、Clash 控制器和邮件服务配置。只存在旧配置时，脚本会提示迁移。
 3. 使用新版脚本时，采集、验号和续登每次都从项目 `.env` 读取账号记录。账号记录以文件为准，常驻调度在下一次雪球任务开始时读到独立进程写回的新值。单账号采集使用 `--account <ID>`。
 

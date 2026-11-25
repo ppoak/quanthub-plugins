@@ -360,10 +360,6 @@ class XueqiuClient:
 
     def _open_request(self, request_url: str, account: XueqiuAccount) -> str:
         headers = dict(self.base_headers)
-        if account.user_agent:
-            headers["User-Agent"] = account.user_agent
-        if account.device_id:
-            headers["x-device-id"] = account.device_id
         token = account.token
         headers["Cookie"] = f"xq_a_token={token};xq-dj-token={token};xq_is_login=1"
         request = urllib.request.Request(request_url, headers=headers)
