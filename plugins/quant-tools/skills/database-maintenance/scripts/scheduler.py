@@ -141,7 +141,9 @@ def _run_script_main(
     try:
         with contextlib.redirect_stdout(output), contextlib.redirect_stderr(output):
             try:
-                module.main()
+                result = module.main()
+                if type(result) is int:
+                    return result
             except SystemExit as exc:
                 return int(exc.code or 0) if isinstance(exc.code, int) else 1
     finally:

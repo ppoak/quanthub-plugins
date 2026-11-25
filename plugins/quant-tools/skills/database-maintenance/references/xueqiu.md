@@ -9,7 +9,7 @@
 | `scripts/xueqiu/fetch_xueqiu_hot_rank.py` | 采集热榜结果并写入日分区。 |
 | `scripts/xueqiu/fetch_xueqiu_status.py` | 采集雪球状态评论并写入日分区。 |
 | `scripts/xueqiu/fetch_xueqiu_cube_rebalance.py` | 采集组合调仓买卖次数并写入日分区。 |
-| `scripts/xueqiu/email_relogin.py` | 保存认证状态，并按 ID token 临期状态执行邮件二维码重登录；同时提供可被外部 scheduler 调用的函数和 CLI。 |
+| `scripts/xueqiu/email_relogin.py` | 实时核对账号身份，按需通过邮件二维码重登录，并同步更新配置文件和当前进程中的 token。 |
 | `scripts/scheduler.py` | 统一登记雪球采集与认证任务，按设定日期和交易日运行。 |
 
 ## 访问配置
@@ -93,7 +93,7 @@ uv run --locked python "<path-to-skill>/scripts/xueqiu/fetch_xueqiu_cube_rebalan
 
 ### 它做什么
 
-调度器运行重登录任务时，会用每个配置 token 调用雪球账号绑定和用户信息接口，核对手机号并获取雪球用户名。实际身份验证成功才算通过；token 缺失、接口失败或手机号不匹配的账号会进入 Chrome 二维码重登录流程，成功后把新的 token 写回 `.env`。
+调度器逐账号调用雪球账号绑定和用户信息接口，核对手机号并获取雪球用户名。token 缺失、被雪球拒绝或手机号不匹配时，可通过 Chrome 二维码重登录。接口暂时不可用或掩码手机号匹配多个账号时，任务会记录该账号的失败原因并继续检查其他账号。重登录成功后，新 token 会写入 `.env` 并同步到当前调度进程。
 
 调度器邮件会用独立表格行展示每个账号的手机号尾号和雪球用户名。验证或重登录失败时，用户名位置显示失败原因。
 
@@ -130,7 +130,7 @@ XUEQIU_RELOGIN_SCHEDULE_DAYS=all
 XUEQIU_RELOGIN_TIMEOUT=600
 ```
 
-相同位置的内容属于同一个账号：第一个手机号、第一封邮箱、第一枚 token 是一组。三行的数量必须一样。`EMAIL_PASSWORD` 填邮箱授权码，不是邮箱登录密码。
+相同位置的手机号、邮箱和 token 属于同一账号。某项暂缺时保留其空位，避免后续账号错配。调度器会报告缺失的邮箱，缺失的 token 可通过二维码重登录补齐。`EMAIL_PASSWORD` 填邮箱授权码。
 
 上面的示例使用 QQ 邮箱发信。其他邮箱还需设置 `XUEQIU_IMAP_SERVER` 为该邮箱的收信服务器；收信账号和授权码默认与发信相同。
 
@@ -153,7 +153,7 @@ uv run --locked python "<path-to-skill>/scripts/xueqiu/email_relogin.py" "<完�
 
 ### 按时间自动登录
 
-每个账号先按上面的命令手动登录一次，程序才会留下到期记录。定时任务只检查已有记录中即将到期或上次登录失败的账号；默认提前五天检查，仍然登录着就直接复用。
+定时任务每次实时检查所有已配置的手机号。`--check-accounts` 可手动运行相同的检查和重登录流程。`--recipient` 指定二维码邮件的收件地址。
 
 查看任务：
 
