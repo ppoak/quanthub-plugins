@@ -4,7 +4,7 @@
 
 | 文件 | 用途 |
 | --- | --- |
-| `scripts/xueqiu/client.py` | 读取凭据、规范证券代码、绑定代理节点与请求身份、调用雪球 API，并处理 token 失效通知。 |
+| `scripts/xueqiu/client.py` | 读取凭据、规范证券代码、按账号选择 HTTP 代理、调用雪球 API，并处理 token 失效通知。 |
 | `scripts/xueqiu/fetch_xueqiu_social_count.py` | 采集股票关注数与讨论数并写入日分区。 |
 | `scripts/xueqiu/fetch_xueqiu_hot_rank.py` | 采集热榜结果并写入日分区。 |
 | `scripts/xueqiu/fetch_xueqiu_status.py` | 采集雪球状态评论并写入日分区。 |
@@ -17,21 +17,18 @@
 在项目根目录 `.env` 中配置：
 
 ```dotenv
-# 手机号,二维码收件邮箱,Clash 节点编号,Token
-XUEQIU_ACCOUNT_0650='13800000650,a@example.com,2,token_a'
+# 手机号,二维码收件邮箱,HTTP 代理 URL,Token
+XUEQIU_ACCOUNT_0650='13800000650,a@example.com,http://127.0.0.1:18081,token_a'
 XUEQIU_ACCOUNT_B='13800000002,b@example.com,,'
 XUEQIU_PROXY=http://127.0.0.1:7890
-XUEQIU_CLASH_CONTROLLER=http://127.0.0.1:<controller-port>
-XUEQIU_CLASH_SECRET=<controller-secret>
-XUEQIU_CLASH_GROUP=GLOBAL
 ```
 
-ID 使用大写字母、数字或下划线。手机号和邮箱必填，节点是从零开始的编号，留空时走默认代理路由。Token 留空时，该账号可用二维码续登，取得 Token 后才参与采集。只按前三个英文逗号拆分账号记录，Token 中其余逗号原样保留。状态和评论分页始终使用同一账号。
+ID 使用大写字母、数字或下划线。手机号和邮箱必填。第三字段为可选的 HTTP 代理 URL。账号代理优先，留空时使用采集命令的 `--proxy` 或全局 `XUEQIU_PROXY`，均未设定时直连。已配置的代理连接失败时报告错误。采集、验号和浏览器续登按同一账号选择代理。代理的监听端口和出站路由由代理服务管理。Token 留空时，该账号可用二维码续登，取得 Token 后才参与采集。只按前三个英文逗号拆分账号记录，Token 中其余逗号原样保留。状态和评论分页始终使用同一账号。
 
 ### 从旧配置迁移
 
-1. 核对每个手机号实际对应的邮箱、节点和 Token，再按上述格式把这些字段写入同一条账号记录。
-2. 从项目 `.env` 移除旧的手机号、邮箱、Token、节点及请求身份并行列表。保留共享代理、Clash 控制器和邮件服务配置。只存在旧配置时，脚本会提示迁移。
+1. 核对每个手机号实际对应的邮箱、代理 URL 和 Token，再按上述格式把这些字段写入同一条账号记录。
+2. 从项目 `.env` 移除旧的手机号、邮箱、Token、节点及请求身份并行列表。保留共享代理和邮件服务配置。已有账号记录如果第三字段是节点编号，将其替换为对应的 HTTP 代理 URL，或清空以使用默认行为。旧的 Clash 控制器配置可删除。
 3. 使用新版脚本时，采集、验号和续登每次都从项目 `.env` 读取账号记录。账号记录以文件为准，常驻调度在下一次雪球任务开始时读到独立进程写回的新值。单账号采集使用 `--account <ID>`。
 
 默认调度设置：
@@ -181,6 +178,6 @@ uv run --locked python "<path-to-skill>/scripts/scheduler.py"
 
 ## 故障处理
 
-- HTTP 405 按可能的 WAF 限制排查；先降低并发、增加请求间隔，再确认 token 和 Clash 节点状态。
+- HTTP 405 按可能的 WAF 限制排查；先降低并发、增加请求间隔，再确认 Token 和该账号使用的代理连通性。
 - 任务从最后完成批次恢复，重跑前先处理当前失败条件。
 - 生产 token 保持失效提醒可用。

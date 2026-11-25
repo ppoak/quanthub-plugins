@@ -140,7 +140,7 @@ EMAIL_PASSWORD=<smtp-password>
 SMTP_SERVER=<smtp-server>
 SMTP_PORT=465
 SMTP_USE_SSL=1
-# phone,qr_email,clash_node_index,token
+# phone,qr_email,http_proxy_url,token
 XUEQIU_ACCOUNT_0650='<phone>,<qr-mailbox>,,<token>'
 XUEQIU_RELOGIN_SCHEDULE_TIME=22:00
 XUEQIU_RELOGIN_SCHEDULE_DAYS=all

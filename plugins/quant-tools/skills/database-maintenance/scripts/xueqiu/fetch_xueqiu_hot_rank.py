@@ -141,14 +141,13 @@ def main() -> str:
     args = parse_args()
     target_date = pd.to_datetime(args.date).date().isoformat()
     data_root = Path(args.data_root)
-    accounts, proxy, clash_switcher, notifier = create_runtime(args)
+    accounts, proxy, notifier = create_runtime(args)
     print(f"fetch_start table={args.table_name} date={target_date} rank_types={args.hot_rank_types}")
 
     client = XueqiuClient(
         accounts,
         host="stock.xueqiu.com",
         proxy=proxy,
-        clash_switcher=clash_switcher,
         notifier=notifier,
         device_id=None,
         timeout=args.timeout,

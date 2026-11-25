@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import argparse
-from contextlib import nullcontext
 import ssl
 import sys
 import imaplib
@@ -16,6 +15,7 @@ import uuid
 import json
 import urllib.error
 import urllib.request
+from urllib.parse import unquote
 from datetime import datetime
 from email import message_from_bytes
 from email.header import decode_header
@@ -31,8 +31,8 @@ if str(SKILL_ROOT) not in sys.path:
     sys.path.insert(0, str(SKILL_ROOT))
 
 from scripts.common.scheduler import load_env_file, record_task_output
-from scripts.xueqiu.accounts import XueqiuAccount, load_accounts, replace_account_token
-from scripts.xueqiu.client import DEFAULT_USER_AGENT, ClashNodeSwitcher, build_clash_switcher
+from scripts.xueqiu.accounts import XueqiuAccount, load_accounts, parse_proxy_url, replace_account_token
+from scripts.xueqiu.client import DEFAULT_USER_AGENT, build_xueqiu_opener
 
 
 AUTH_ROOT = Path(".tmp/database-maintenance/xueqiu-auth")
@@ -231,13 +231,8 @@ def _request_json(
             "Cookie": f"xq_a_token={token};xq-dj-token={token};xq_is_login=1",
         },
     )
-    proxy_handler = (
-        urllib.request.ProxyHandler({"http": proxy, "https": proxy})
-        if proxy
-        else urllib.request.ProxyHandler({})
-    )
-    opener = urllib.request.build_opener(proxy_handler, NoIdentityRedirect())
     try:
+        opener = build_xueqiu_opener(proxy, NoIdentityRedirect())
         with opener.open(request, timeout=timeout) as response:
             return _identity_payload(response.status, json.loads(response.read()))
     except urllib.error.HTTPError as exc:
@@ -278,16 +273,14 @@ def _request_timeout(timeout: float, deadline: float | None) -> float:
 def verify_token_account(
     account: XueqiuAccount, *, proxy: str | None, timeout: float, phones: set[str],
     deadline: float | None = None, candidate_token: str | None = None,
-    clash_switcher: ClashNodeSwitcher | None = None,
 ) -> str:
     token = account.token if candidate_token is None else candidate_token
+    proxy = account.proxy_url or proxy
 
     def request_json(url: str) -> dict:
         return _request_json(url, token, proxy=proxy, timeout=_request_timeout(timeout, deadline))
 
-    route = clash_switcher.route(account) if clash_switcher else nullcontext()
-    with route:
-        return _account_username(request_json, account.phone, phones)
+    return _account_username(request_json, account.phone, phones)
 
 
 def _record_account_summary(account: XueqiuAccount, value: str) -> None:
@@ -308,7 +301,6 @@ def scheduled_relogin(
     proxy = os.environ.get("XUEQIU_PROXY")
     validation_timeout = int(os.environ.get("XUEQIU_RELOGIN_VERIFY_TIMEOUT", "20"))
     phones = {account.phone for account in accounts.values()}
-    clash_switcher = build_clash_switcher(list(accounts.values()))
     success = True
     for account in accounts.values():
         print(f"xueqiu_account_check account={account.id} phone_suffix={account.phone[-4:]}")
@@ -317,7 +309,6 @@ def scheduled_relogin(
                 raise AuthenticationFailed("Missing token")
             username = verify_token_account(
                 account, proxy=proxy, timeout=validation_timeout, phones=phones,
-                clash_switcher=clash_switcher,
             )
         except AuthenticationFailed as exc:
             reason = str(exc)
@@ -326,7 +317,6 @@ def scheduled_relogin(
                 username = playwright_relogin(
                     account, env_path=env_path, profile_dir=profile_dir,
                     total_timeout_seconds=total_timeout_seconds,
-                    clash_switcher=clash_switcher,
                 )
                 if username is None:
                     raise ReloginFailed("QR login timed out")
@@ -361,7 +351,6 @@ def _session_cookie(context) -> str:
 def session_token(
     context, account: XueqiuAccount, *, timeout_ms: int, phones: set[str],
     deadline: float | None = None, reject_session: bool = False,
-    clash_switcher: ClashNodeSwitcher | None = None,
 ) -> tuple[str, str] | None:
     from playwright.sync_api import Error
 
@@ -386,7 +375,7 @@ def session_token(
             return None
         username = verify_token_account(
             account, candidate_token=token, proxy=os.environ.get("XUEQIU_PROXY"),
-            timeout=timeout_ms / 1000, deadline=deadline, phones=phones, clash_switcher=clash_switcher,
+            timeout=timeout_ms / 1000, deadline=deadline, phones=phones,
         )
     except AccountIdentityMismatch:
         raise
@@ -482,7 +471,6 @@ def playwright_relogin(
     env_path: str | Path = ".env",
     profile_dir: str | Path | None = None,
     total_timeout_seconds: int = 600,
-    clash_switcher: ClashNodeSwitcher | None = None,
 ) -> str | None:
     from playwright.sync_api import sync_playwright
 
@@ -491,13 +479,17 @@ def playwright_relogin(
     if accounts.get(account.id) != account:
         raise ReloginFailed(f"{account.key} changed before browser login")
     phones = {item.phone for item in accounts.values()}
-    if clash_switcher is None:
-        clash_switcher = build_clash_switcher([account])
     log_progress("started", phone_suffix=phone[-4:], account=account.id,
                  timeout_seconds=total_timeout_seconds, login_mode="qr_email")
     if total_timeout_seconds <= 0:
         raise ValueError("Login timeout must be positive")
-    proxy = os.environ.get("XUEQIU_PROXY")
+    proxy = account.proxy_url or os.environ.get("XUEQIU_PROXY")
+    browser_proxy = None
+    if proxy:
+        url = parse_proxy_url(proxy, "Xueqiu browser proxy")
+        browser_proxy = {"server": f"{url.scheme}://{url.netloc.rsplit('@', 1)[-1]}"}
+        if url.username is not None:
+            browser_proxy.update(username=unquote(url.username), password=unquote(url.password or ""))
     profile_root = Path(profile_dir) if profile_dir is not None else Path(env_path).resolve().parent / DEFAULT_PROFILE_DIR
     account_key = hashlib.sha256(phone.encode("utf-8")).hexdigest()
     account_profile = profile_root / f"account-{account_key}"
@@ -515,7 +507,8 @@ def playwright_relogin(
                 str(account_profile),
                 channel="chrome",
                 headless=False,
-                proxy={"server": proxy} if proxy else None,
+                proxy=browser_proxy,
+                args=None if browser_proxy else ["--no-proxy-server"],
             )
         except Exception as exc:
             raise ReloginFailed(f"Launching the browser profile failed ({type(exc).__name__})") from exc
@@ -524,7 +517,6 @@ def playwright_relogin(
             try:
                 verified = session_token(
                     context, account, timeout_ms=30_000, phones=phones, reject_session=True,
-                    clash_switcher=clash_switcher,
                 )
             except AuthenticationFailed:
                 stage = "discarding the existing session"
@@ -576,7 +568,6 @@ def playwright_relogin(
                     try:
                         verified = session_token(
                             context, account, timeout_ms=15_000, phones=phones, deadline=deadline,
-                            clash_switcher=clash_switcher,
                         )
                         last_identity_error = None
                     except IdentityUnavailable as exc:
