@@ -1,0 +1,182 @@
+"""Named Xueqiu accounts stored in the project dotenv file."""
+
+from __future__ import annotations
+
+import contextlib
+import ctypes
+import os
+import re
+import stat
+import tempfile
+from dataclasses import dataclass, field
+from pathlib import Path
+
+ACCOUNT_PREFIX = "XUEQIU_ACCOUNT_"
+LEGACY_KEYS = {
+    "XUEQIU_TOKENS", "XUEQIU_TOKEN", "XUEQIU_LOGIN_PHONES", "XUEQIU_LOGIN_EMAILS",
+    "XUEQIU_CLASH_NODE_INDICES", "XUEQIU_USER_AGENTS", "XUEQIU_DEVICE_IDS",
+}
+
+
+@dataclass(frozen=True)
+class XueqiuAccount:
+    id: str
+    phone: str
+    qr_email: str
+    node_index: int | None
+    token: str = field(repr=False)
+    user_agent: str | None = None
+    device_id: str | None = None
+
+    @property
+    def key(self) -> str:
+        return ACCOUNT_PREFIX + self.id
+
+
+def _parse_accounts(lines: list[str]) -> dict[str, XueqiuAccount]:
+    entries: dict[str, str] = {}
+    for line in lines:
+        key, separator, value = line.partition("=")
+        key = key.strip()
+        if not separator or not key or key.startswith("#"):
+            continue
+        if key in entries and key.startswith((ACCOUNT_PREFIX, "XUEQIU_USER_AGENT_", "XUEQIU_DEVICE_ID_")):
+            raise ValueError(f"Duplicate Xueqiu configuration key: {key}")
+        value = value.strip()
+        if len(value) >= 2 and value[0] in {"'", '"'} and value[-1] == value[0]:
+            value = value[1:-1]
+        entries.setdefault(key, value)
+
+    accounts: dict[str, XueqiuAccount] = {}
+    phones: set[str] = set()
+    tokens: set[str] = set()
+    for key, value in entries.items():
+        if not key.startswith(ACCOUNT_PREFIX):
+            continue
+        account_id = key[len(ACCOUNT_PREFIX):]
+        if not re.fullmatch(r"[A-Z0-9_]+", account_id):
+            raise ValueError("Xueqiu account IDs must contain uppercase letters, digits or underscores")
+        parts = [part.strip() for part in value.split(",", 3)]
+        if len(parts) != 4:
+            raise ValueError(f"{key} must contain phone, QR email, node index and token")
+        phone, email, node, token = parts
+        if not re.fullmatch(r"[0-9]{4,}", phone) or not re.fullmatch(r"[^@\s]+@[^@\s]+", email):
+            raise ValueError(f"{key} requires a valid phone and QR email")
+        if node and not re.fullmatch(r"[0-9]+", node):
+            raise ValueError(f"{key} requires a nonnegative Clash node index or an empty node")
+        if phone in phones or (token and token in tokens):
+            raise ValueError(f"{key} duplicates another account phone or token")
+        phones.add(phone)
+        tokens.add(token)
+        accounts[account_id] = XueqiuAccount(
+            account_id, phone, email, int(node) if node else None, token,
+            entries.get(f"XUEQIU_USER_AGENT_{account_id}") or None,
+            entries.get(f"XUEQIU_DEVICE_ID_{account_id}") or None,
+        )
+    if not accounts and any(entries.get(key) or os.environ.get(key) for key in LEGACY_KEYS):
+        raise ValueError("Migrate the legacy Xueqiu lists to XUEQIU_ACCOUNT_<ID> records")
+    return accounts
+
+
+def load_accounts(path: str | Path = ".env") -> dict[str, XueqiuAccount]:
+    path = Path(path)
+    lines = path.read_text(encoding="utf-8-sig").splitlines() if path.exists() else []
+    return _parse_accounts(lines)
+
+
+@contextlib.contextmanager
+def _token_write_lock(path: Path):
+    lock_dir = path.parent / ".tmp"
+    lock_dir.mkdir(exist_ok=True)
+    with (lock_dir / (path.name + ".lock")).open("a+b") as lock:
+        lock.seek(0)
+        if os.name == "nt":
+            import msvcrt
+            msvcrt.locking(lock.fileno(), msvcrt.LK_LOCK, 1)
+        else:
+            import fcntl
+            fcntl.flock(lock, fcntl.LOCK_EX)
+        yield
+
+
+def _copy_token_file_permissions(source: Path, target: Path) -> None:
+    if not source.exists():
+        return
+    if os.name != "nt":
+        target.chmod(stat.S_IMODE(source.stat().st_mode))
+        return
+
+    from ctypes import wintypes
+
+    security = ctypes.WinDLL("advapi32", use_last_error=True)
+    get_security = security.GetFileSecurityW
+    get_security.argtypes = (
+        wintypes.LPCWSTR, wintypes.DWORD, ctypes.c_void_p, wintypes.DWORD,
+        ctypes.POINTER(wintypes.DWORD),
+    )
+    set_security = security.SetFileSecurityW
+    set_security.argtypes = (wintypes.LPCWSTR, wintypes.DWORD, ctypes.c_void_p)
+    get_control = security.GetSecurityDescriptorControl
+    get_control.argtypes = (
+        ctypes.c_void_p, ctypes.POINTER(wintypes.WORD), ctypes.POINTER(wintypes.DWORD),
+    )
+    dacl = 0x4
+    needed = wintypes.DWORD()
+    get_security(str(source), dacl, None, 0, ctypes.byref(needed))
+    if not needed.value:
+        raise ctypes.WinError(ctypes.get_last_error())
+    descriptor = ctypes.create_string_buffer(needed.value)
+    if not get_security(str(source), dacl, descriptor, needed, ctypes.byref(needed)):
+        raise ctypes.WinError(ctypes.get_last_error())
+    control = wintypes.WORD()
+    revision = wintypes.DWORD()
+    if not get_control(descriptor, ctypes.byref(control), ctypes.byref(revision)):
+        raise ctypes.WinError(ctypes.get_last_error())
+    inheritance = 0x80000000 if control.value & 0x1000 else 0x20000000
+    if not set_security(str(target), dacl | inheritance, descriptor):
+        raise ctypes.WinError(ctypes.get_last_error())
+
+
+def replace_account_token(path: str | Path, account: XueqiuAccount, token: str) -> None:
+    path = Path(path).resolve()
+    if not token or "\n" in token or "\r" in token:
+        raise ValueError("Invalid replacement Xueqiu token")
+    with _token_write_lock(path):
+        raw = path.read_bytes()
+        text = raw.decode("utf-8-sig")
+        lines = text.splitlines(keepends=True)
+        accounts = _parse_accounts(lines)
+        if accounts.get(account.id) != account:
+            raise ValueError(f"{account.key} changed during login")
+        if any(other.id != account.id and other.token == token for other in accounts.values()):
+            raise ValueError(f"{account.key} received another account's token")
+
+        for index, line in enumerate(lines):
+            if line.partition("=")[0].strip() != account.key:
+                continue
+            value = line.rstrip("\r\n")
+            newline = line[len(value):]
+            phone, email, node, old_token = value.split(",", 3)
+            _, _, raw_value = line.partition("=")
+            quote = raw_value.lstrip()[:1]
+            suffix = old_token[len(old_token.rstrip()):]
+            previous = old_token.rstrip()
+            if quote in {"'", '"'} and previous.endswith(quote):
+                previous = previous[:-1]
+                suffix = quote + suffix
+            padding = previous[:len(previous) - len(previous.lstrip())]
+            content = previous[len(padding):]
+            suffix = content[len(content.rstrip()):] + suffix
+            lines[index] = f"{phone},{email},{node},{padding}{token}{suffix}{newline}"
+            break
+
+        fd, name = tempfile.mkstemp(dir=path.parent, prefix=f".{path.name}.", suffix=".tmp")
+        os.close(fd)
+        temporary = Path(name)
+        try:
+            _copy_token_file_permissions(path, temporary)
+            encoding = "utf-8-sig" if raw.startswith(b"\xef\xbb\xbf") else "utf-8"
+            temporary.write_bytes("".join(lines).encode(encoding))
+            temporary.replace(path)
+        finally:
+            temporary.unlink(missing_ok=True)

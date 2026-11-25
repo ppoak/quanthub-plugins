@@ -3,11 +3,9 @@
 from __future__ import annotations
 
 import argparse
-import contextlib
-import ctypes
+from contextlib import nullcontext
 import ssl
-import stat
-import tempfile
+import sys
 import imaplib
 import os
 import re
@@ -26,6 +24,15 @@ from email.utils import make_msgid
 from html.parser import HTMLParser
 from pathlib import Path
 from typing import Callable
+
+
+SKILL_ROOT = Path(__file__).resolve().parents[2]
+if str(SKILL_ROOT) not in sys.path:
+    sys.path.insert(0, str(SKILL_ROOT))
+
+from scripts.common.scheduler import load_env_file, record_task_output
+from scripts.xueqiu.accounts import XueqiuAccount, load_accounts, replace_account_token
+from scripts.xueqiu.client import ClashNodeSwitcher, build_clash_switcher
 
 
 AUTH_ROOT = Path(".tmp/database-maintenance/xueqiu-auth")
@@ -178,16 +185,6 @@ def poll_refresh_request(
     return None
 
 
-def configured_login_targets() -> list[tuple[int, str, str]]:
-    phones = _ordered_values("XUEQIU_LOGIN_PHONES")
-    recipients = _ordered_values("XUEQIU_LOGIN_EMAILS")
-    return [
-        (index, phone, recipients[index] if index < len(recipients) else "")
-        for index, phone in enumerate(phones)
-        if phone
-    ]
-
-
 class AuthenticationFailed(RuntimeError):
     """Xueqiu rejected the credentials."""
 
@@ -223,11 +220,14 @@ def _identity_payload(status: int, payload: object) -> dict:
     return data
 
 
-def _request_json(url: str, token: str, *, proxy: str | None, timeout: float) -> dict:
+def _request_json(
+    url: str, token: str, *, proxy: str | None, timeout: float, account: XueqiuAccount,
+) -> dict:
     request = urllib.request.Request(
         url,
         headers={
-            "User-Agent": "Xueqiu iPhone 14.91",
+            "User-Agent": account.user_agent or "Xueqiu iPhone 14.91",
+            **({"x-device-id": account.device_id} if account.device_id else {}),
             "Accept": "application/json",
             "Cookie": f"xq_a_token={token};xq-dj-token={token};xq_is_login=1",
         },
@@ -252,14 +252,14 @@ def _request_json(url: str, token: str, *, proxy: str | None, timeout: float) ->
         raise IdentityUnavailable(f"Identity request failed ({type(exc).__name__})") from exc
 
 
-def _account_username(request_json: Callable[[str], dict], phone: str) -> str:
+def _account_username(request_json: Callable[[str], dict], phone: str, phones: set[str]) -> str:
     telephone = str(request_json(ACCOUNT_BIND_URL).get("telephone") or "").strip()
     pattern = re.escape(telephone).replace(r"\*", r"\d")
     if not telephone or sum(char.isdigit() for char in telephone) < 4:
         raise IdentityUnavailable("Identity endpoint returned no usable phone")
     if not re.fullmatch(pattern, phone):
         raise AccountIdentityMismatch("Xueqiu account phone does not match the login target")
-    candidates = set(_ordered_values("XUEQIU_LOGIN_PHONES")) | {phone}
+    candidates = phones | {phone}
     if sum(bool(re.fullmatch(pattern, candidate)) for candidate in candidates) > 1:
         raise IdentityUnavailable("Masked phone matches multiple configured accounts")
     profile = request_json(USER_SHOW_URL)
@@ -277,225 +277,73 @@ def _request_timeout(timeout: float, deadline: float | None) -> float:
 
 
 def verify_token_account(
-    token: str, phone: str, *, proxy: str | None, timeout: float, deadline: float | None = None,
+    account: XueqiuAccount, *, proxy: str | None, timeout: float, phones: set[str],
+    deadline: float | None = None, candidate_token: str | None = None,
+    clash_switcher: ClashNodeSwitcher | None = None,
 ) -> str:
+    token = account.token if candidate_token is None else candidate_token
+
     def request_json(url: str) -> dict:
-        return _request_json(url, token, proxy=proxy, timeout=_request_timeout(timeout, deadline))
+        return _request_json(url, token, proxy=proxy, timeout=_request_timeout(timeout, deadline), account=account)
 
-    return _account_username(request_json, phone)
+    route = clash_switcher.route(account) if clash_switcher else nullcontext()
+    with route:
+        return _account_username(request_json, account.phone, phones)
 
 
-def _record_account_summary(phone: str, value: str) -> None:
-    label = phone if phone.startswith("slot ") else phone[-4:]
+def _record_account_summary(account: XueqiuAccount, value: str) -> None:
+    label = f"{account.id} ({account.phone[-4:]})"
     if value.startswith("FAILED:"):
         print(f"xueqiu_account_result account={label} {value}", flush=True)
-    try:
-        from scripts.common.scheduler import record_task_output
-    except ImportError:
-        return
     record_task_output(f"Xueqiu account {label}", value, None, operation="account")
-
-
-def _token_values() -> list[str]:
-    return _credential_slots(os.environ)
 
 
 def scheduled_relogin(
     *, total_timeout_seconds: int = 600,
     env_path: str | Path = ".env", profile_dir: str | Path | None = None,
 ) -> bool:
-    targets = configured_login_targets()
-    tokens = _token_values()
-    configured_slots = {index for index, _, _ in targets}
-    missing_phones = [index for index, token in enumerate(tokens) if token and index not in configured_slots]
-    for index in missing_phones:
-        _record_account_summary(f"slot {index}", "FAILED: Token has no configured phone")
-    if not targets and not missing_phones:
+    accounts = load_accounts(env_path)
+    if not accounts:
         print("xueqiu_relogin_skipped reason=no_configured_accounts")
         return True
     proxy = os.environ.get("XUEQIU_PROXY")
     validation_timeout = int(os.environ.get("XUEQIU_RELOGIN_VERIFY_TIMEOUT", "20"))
-    success = not missing_phones
-    for token_index, phone, recipient in targets:
-        print(f"xueqiu_account_check token_index={token_index} phone_suffix={phone[-4:]}")
+    phones = {account.phone for account in accounts.values()}
+    clash_switcher = build_clash_switcher(list(accounts.values()))
+    success = True
+    for account in accounts.values():
+        print(f"xueqiu_account_check account={account.id} phone_suffix={account.phone[-4:]}")
         try:
-            token = tokens[token_index] if token_index < len(tokens) else ""
-            if not token:
+            if not account.token:
                 raise AuthenticationFailed("Missing token")
             username = verify_token_account(
-                token, phone, proxy=proxy, timeout=validation_timeout,
+                account, proxy=proxy, timeout=validation_timeout, phones=phones,
+                clash_switcher=clash_switcher,
             )
-            if not recipient:
-                _record_account_summary(phone, f"FAILED: Missing QR login email recipient (verified as {username})")
-                success = False
-            else:
-                _record_account_summary(phone, username)
-            print(f"xueqiu_account_check_success phone_suffix={phone[-4:]} username={username}")
-            continue
         except AuthenticationFailed as exc:
             reason = str(exc)
-            print(f"xueqiu_account_check_failed phone_suffix={phone[-4:]} reason={reason}")
+            try:
+                print(f"xueqiu_relogin_start account={account.id} reason={reason}")
+                username = playwright_relogin(
+                    account, env_path=env_path, profile_dir=profile_dir,
+                    total_timeout_seconds=total_timeout_seconds,
+                    clash_switcher=clash_switcher,
+                )
+                if username is None:
+                    raise ReloginFailed("QR login timed out")
+            except Exception as exc:
+                detail = str(exc) if isinstance(exc, ReloginFailed) else f"Browser setup or cleanup failed ({type(exc).__name__})"
+                _record_account_summary(account, f"FAILED: {reason}. Relogin: {detail}")
+                success = False
+                continue
         except Exception as exc:
             detail = str(exc) if isinstance(exc, IdentityUnavailable) else type(exc).__name__
-            _record_account_summary(phone, f"FAILED: Account verification: {detail}")
+            _record_account_summary(account, f"FAILED: Account verification: {detail}")
             success = False
             continue
-
-        try:
-            if not recipient:
-                raise ReloginFailed("Missing QR login email recipient")
-            print(f"xueqiu_relogin_start token_index={token_index} phone_suffix={phone[-4:]}")
-            username = playwright_relogin(
-                phone,
-                token_index=token_index,
-                recipient=recipient,
-                env_path=env_path,
-                profile_dir=profile_dir,
-                total_timeout_seconds=total_timeout_seconds,
-            )
-            if username is None:
-                raise ReloginFailed("QR login timed out")
-        except Exception as exc:
-            detail = str(exc) if isinstance(exc, ReloginFailed) else f"Browser setup or cleanup failed ({type(exc).__name__})"
-            _record_account_summary(phone, f"FAILED: {reason}. Relogin: {detail}")
-            success = False
-            continue
-        _record_account_summary(phone, username)
+        _record_account_summary(account, username)
+        print(f"xueqiu_account_check_success account={account.id} username={username}")
     return success
-
-
-def _dotenv_entries(path: Path) -> dict[str, str]:
-    entries: dict[str, str] = {}
-    if path.exists():
-        for line in path.read_text(encoding="utf-8-sig").splitlines():
-            key, separator, value = line.partition("=")
-            if separator and key.strip() and not key.lstrip().startswith("#"):
-                entries.setdefault(key.strip(), value.strip().strip("\"'"))
-    return entries
-
-
-def _credential_slots(entries) -> list[str]:
-    value = entries.get("XUEQIU_TOKENS") or entries.get("XUEQIU_TOKEN")
-    return _split_slots(value) if value else []
-
-
-def _slot(slots: list[str], index: int) -> str:
-    return slots[index] if index < len(slots) else ""
-
-
-def _set_slot(slots: list[str], index: int, value: str) -> None:
-    slots.extend([""] * (index + 1 - len(slots)))
-    slots[index] = value
-
-
-def _publish_tokens(slots: list[str]) -> None:
-    os.environ["XUEQIU_TOKENS"] = ",".join(slots)
-    os.environ["XUEQIU_TOKEN"] = _slot(slots, 0)
-
-
-def watch_token_file(path: Path) -> Callable[[], None]:
-    """Keep startup overrides until the corresponding file slot changes."""
-    previous = _credential_slots(_dotenv_entries(path))
-
-    def reload() -> None:
-        nonlocal previous
-        current = _credential_slots(_dotenv_entries(path))
-        if current == previous:
-            return
-        active = _token_values()
-        for index in range(max(len(previous), len(current))):
-            if _slot(current, index) != _slot(previous, index):
-                _set_slot(active, index, _slot(current, index))
-        _publish_tokens(active)
-        previous = current
-
-    return reload
-
-
-@contextlib.contextmanager
-def _token_write_lock(path: Path):
-    lock_dir = path.parent / ".tmp"
-    lock_dir.mkdir(exist_ok=True)
-    with (lock_dir / (path.name + ".lock")).open("a+b") as lock:
-        lock.seek(0)
-        if os.name == "nt":
-            import msvcrt
-            msvcrt.locking(lock.fileno(), msvcrt.LK_LOCK, 1)
-        else:
-            import fcntl
-            fcntl.flock(lock, fcntl.LOCK_EX)
-        yield
-
-
-def _copy_token_file_permissions(source: Path, target: Path) -> None:
-    if not source.exists():
-        return
-    if os.name != "nt":
-        target.chmod(stat.S_IMODE(source.stat().st_mode))
-        return
-
-    from ctypes import wintypes
-
-    security = ctypes.WinDLL("advapi32", use_last_error=True)
-    get_security = security.GetFileSecurityW
-    get_security.argtypes = (
-        wintypes.LPCWSTR, wintypes.DWORD, ctypes.c_void_p, wintypes.DWORD,
-        ctypes.POINTER(wintypes.DWORD),
-    )
-    set_security = security.SetFileSecurityW
-    set_security.argtypes = (wintypes.LPCWSTR, wintypes.DWORD, ctypes.c_void_p)
-    get_control = security.GetSecurityDescriptorControl
-    get_control.argtypes = (
-        ctypes.c_void_p, ctypes.POINTER(wintypes.WORD), ctypes.POINTER(wintypes.DWORD),
-    )
-    dacl = 0x4
-    needed = wintypes.DWORD()
-    get_security(str(source), dacl, None, 0, ctypes.byref(needed))
-    if not needed.value:
-        raise ctypes.WinError(ctypes.get_last_error())
-    descriptor = ctypes.create_string_buffer(needed.value)
-    if not get_security(str(source), dacl, descriptor, needed, ctypes.byref(needed)):
-        raise ctypes.WinError(ctypes.get_last_error())
-    control = wintypes.WORD()
-    revision = wintypes.DWORD()
-    if not get_control(descriptor, ctypes.byref(control), ctypes.byref(revision)):
-        raise ctypes.WinError(ctypes.get_last_error())
-    inheritance = 0x80000000 if control.value & 0x1000 else 0x20000000
-    if not set_security(str(target), dacl | inheritance, descriptor):
-        raise ctypes.WinError(ctypes.get_last_error())
-
-
-def replace_token_in_env(token: str, token_index: int = 0, env_path: str | Path = ".env") -> None:
-    path = Path(env_path).resolve()
-    with _token_write_lock(path):
-        file_slots = _credential_slots(_dotenv_entries(path))
-        active_slots = _token_values() or file_slots.copy()
-        _set_slot(file_slots, token_index, token)
-        _set_slot(active_slots, token_index, token)
-        output = []
-        pool_written = False
-        for line in path.read_text(encoding="utf-8-sig").splitlines() if path.exists() else []:
-            key, separator, _ = line.partition("=")
-            if separator and key.strip() == "XUEQIU_TOKENS":
-                if not pool_written:
-                    output.append("XUEQIU_TOKENS=" + ",".join(file_slots))
-                    pool_written = True
-            elif separator and key.strip() == "XUEQIU_TOKEN" and token_index == 0:
-                output.append("XUEQIU_TOKEN=" + token)
-            else:
-                output.append(line)
-        if not pool_written:
-            output.append("XUEQIU_TOKENS=" + ",".join(file_slots))
-        fd, name = tempfile.mkstemp(dir=path.parent, prefix=f".{path.name}.", suffix=".tmp")
-        os.close(fd)
-        temporary = Path(name)
-        try:
-            _copy_token_file_permissions(path, temporary)
-            temporary.write_text("\n".join(output) + "\n", encoding="utf-8")
-            temporary.replace(path)
-        finally:
-            temporary.unlink(missing_ok=True)
-        _publish_tokens(active_slots)
 
 
 def log_progress(stage: str, **details: object) -> None:
@@ -512,7 +360,9 @@ def _session_cookie(context) -> str:
 
 
 def session_token(
-    context, phone: str, *, timeout_ms: int, deadline: float | None = None, reject_session: bool = False,
+    context, account: XueqiuAccount, *, timeout_ms: int, phones: set[str],
+    deadline: float | None = None, reject_session: bool = False,
+    clash_switcher: ClashNodeSwitcher | None = None,
 ) -> tuple[str, str] | None:
     from playwright.sync_api import Error
 
@@ -531,13 +381,13 @@ def session_token(
     if not _session_cookie(context):
         return None
     try:
-        _account_username(request_json, phone)
+        _account_username(request_json, account.phone, phones)
         token = _session_cookie(context)
         if not token:
             return None
         username = verify_token_account(
-            token, phone, proxy=os.environ.get("XUEQIU_PROXY"),
-            timeout=timeout_ms / 1000, deadline=deadline,
+            account, candidate_token=token, proxy=os.environ.get("XUEQIU_PROXY"),
+            timeout=timeout_ms / 1000, deadline=deadline, phones=phones, clash_switcher=clash_switcher,
         )
     except AccountIdentityMismatch:
         raise
@@ -628,22 +478,26 @@ def _refresh_qr(page, *, deadline: float | None = None) -> None:
 
 
 def playwright_relogin(
-    phone: str,
+    account: XueqiuAccount,
     *,
-    token_index: int = 0,
-    recipient: str | None = None,
     env_path: str | Path = ".env",
     profile_dir: str | Path | None = None,
     total_timeout_seconds: int = 600,
+    clash_switcher: ClashNodeSwitcher | None = None,
 ) -> str | None:
     from playwright.sync_api import sync_playwright
 
-    log_progress("started", phone_suffix=phone[-4:], token_index=token_index,
+    phone, recipient = account.phone, account.qr_email
+    accounts = load_accounts(env_path)
+    if accounts.get(account.id) != account:
+        raise ReloginFailed(f"{account.key} changed before browser login")
+    phones = {item.phone for item in accounts.values()}
+    if clash_switcher is None:
+        clash_switcher = build_clash_switcher([account])
+    log_progress("started", phone_suffix=phone[-4:], account=account.id,
                  timeout_seconds=total_timeout_seconds, login_mode="qr_email")
     if total_timeout_seconds <= 0:
         raise ValueError("Login timeout must be positive")
-    if not recipient:
-        raise ValueError("QR login email recipient is required")
     proxy = os.environ.get("XUEQIU_PROXY")
     profile_root = Path(profile_dir) if profile_dir is not None else Path(env_path).resolve().parent / DEFAULT_PROFILE_DIR
     account_key = hashlib.sha256(phone.encode("utf-8")).hexdigest()
@@ -663,13 +517,17 @@ def playwright_relogin(
                 channel="chrome",
                 headless=False,
                 proxy={"server": proxy} if proxy else None,
+                **({"user_agent": account.user_agent} if account.user_agent else {}),
             )
         except Exception as exc:
             raise ReloginFailed(f"Launching the browser profile failed ({type(exc).__name__})") from exc
         stage = "browser session verification"
         try:
             try:
-                verified = session_token(context, phone, timeout_ms=30_000, reject_session=True)
+                verified = session_token(
+                    context, account, timeout_ms=30_000, phones=phones, reject_session=True,
+                    clash_switcher=clash_switcher,
+                )
             except AuthenticationFailed:
                 stage = "discarding the existing session"
                 existing_pages = list(context.pages)
@@ -687,7 +545,7 @@ def playwright_relogin(
             if verified is not None:
                 token, username = verified
                 stage = "saving the verified token"
-                replace_token_in_env(token, token_index=token_index, env_path=env_path)
+                replace_account_token(env_path, account, token)
                 log_progress("completed", result="SUCCESS", session="reused", token_saved=True)
                 print("xueqiu_relogin_success=1", flush=True)
                 return username
@@ -718,7 +576,10 @@ def playwright_relogin(
                 if time.monotonic() >= next_identity_poll:
                     stage = "verifying the scanned account"
                     try:
-                        verified = session_token(context, phone, timeout_ms=15_000, deadline=deadline)
+                        verified = session_token(
+                            context, account, timeout_ms=15_000, phones=phones, deadline=deadline,
+                            clash_switcher=clash_switcher,
+                        )
                         last_identity_error = None
                     except IdentityUnavailable as exc:
                         last_identity_error = str(exc)
@@ -729,7 +590,7 @@ def playwright_relogin(
                 if verified is not None:
                     token, username = verified
                     stage = "saving the verified token"
-                    replace_token_in_env(token, token_index=token_index, env_path=env_path)
+                    replace_account_token(env_path, account, token)
                     log_progress("completed", result="SUCCESS", session="qr", token_saved=True)
                     print("xueqiu_relogin_success=1", flush=True)
                     return username
@@ -802,92 +663,41 @@ def playwright_relogin(
                 log_progress("browser_cleanup_failed", error_type=type(exc).__name__)
 
 
-def load_dotenv(path: str | Path) -> None:
-    for key, value in _dotenv_entries(Path(path)).items():
-        os.environ.setdefault(key, value)
-
-
-def _split_slots(value: str) -> list[str]:
-    return [item.strip() for item in re.split("[,;]", value)]
-
-
-def _ordered_values(name: str) -> list[str]:
-    value = os.environ.get(name, "")
-    return _split_slots(value) if value else []
-
-
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Run a manual email-assisted Xueqiu re-login.")
-    parser.add_argument("phone", nargs="?", help="Xueqiu login phone number")
-    parser.add_argument(
-        "--check-accounts",
-        action="store_true",
-        help=(
-            "Verify each account. Request QR login for missing or rejected tokens or a phone mismatch "
-            "using the configured account recipient. Report service errors and ambiguous identities."
-        ),
+    parser = argparse.ArgumentParser(description="Run an email-assisted Xueqiu re-login.")
+    target = parser.add_mutually_exclusive_group(required=True)
+    target.add_argument("phone", nargs="?", help="Registered Xueqiu login phone")
+    target.add_argument("--account", help="Registered XUEQIU_ACCOUNT_<ID> suffix")
+    target.add_argument(
+        "--check-accounts", action="store_true",
+        help="Verify each account. Request QR login for missing or rejected tokens or a phone mismatch.",
     )
-    parser.add_argument("--token-index", type=int, help="Token position in XUEQIU_TOKENS (zero-based)")
-    parser.add_argument("--recipient", help="QR login email recipient for manual single-account login")
     parser.add_argument("--env-path", default=".env", help="Project dotenv path")
     parser.add_argument("--profile-dir", help="Root directory for persistent per-account login profiles")
     parser.add_argument("--timeout", type=int, default=600, help="Maximum login wait in seconds")
     return parser.parse_args(argv)
 
 
-def resolve_login_target(args: argparse.Namespace) -> tuple[int, str | None]:
-    phones = _ordered_values("XUEQIU_LOGIN_PHONES")
-    recipients = _ordered_values("XUEQIU_LOGIN_EMAILS")
-    matches = [index for index, phone in enumerate(phones) if phone == args.phone]
-    if len(matches) > 1:
-        raise ValueError(f"Phone appears more than once in XUEQIU_LOGIN_PHONES: {args.phone}")
-    if args.token_index is not None:
-        token_index = args.token_index
-        if matches and token_index != matches[0]:
-            raise ValueError("--token-index does not match the configured phone position")
-    elif matches:
-        token_index = matches[0]
-    else:
-        raise ValueError("Phone is not configured; provide --token-index and --recipient")
-    if token_index < 0:
-        raise ValueError("--token-index must be non-negative")
-    recipient = args.recipient
-    if not matches:
-        if _slot(phones, token_index) or _slot(_token_values(), token_index):
-            raise ValueError("Token slot is already assigned to another configured phone")
-        if not recipient:
-            raise ValueError("Unconfigured phones require an explicit --recipient")
-    if recipient is None and token_index < len(recipients):
-        recipient = recipients[token_index]
-    if not recipient:
-        raise ValueError("No recipient configured; provide --recipient")
-    return token_index, recipient
-
-
 def main(argv: list[str] | None = None) -> int:
     args = parse_args(argv)
-    load_dotenv(args.env_path)
-    if args.check_accounts:
-        if args.phone or args.token_index is not None or args.recipient:
-            raise ValueError("--check-accounts cannot be combined with phone, --token-index, or --recipient")
-        return 0 if scheduled_relogin(
-            total_timeout_seconds=args.timeout,
-            env_path=args.env_path,
-            profile_dir=args.profile_dir,
-        ) else 1
-    if not args.phone:
-        raise ValueError("phone is required unless --check-accounts is used")
-    token_index, recipient = resolve_login_target(args)
+    path = Path(args.env_path)
+    load_env_file(path)
     try:
-        username = playwright_relogin(
-            args.phone,
-            token_index=token_index,
-            recipient=recipient,
-            env_path=args.env_path,
-            profile_dir=args.profile_dir,
-            total_timeout_seconds=args.timeout,
+        if args.check_accounts:
+            return 0 if scheduled_relogin(
+                total_timeout_seconds=args.timeout, env_path=path, profile_dir=args.profile_dir,
+            ) else 1
+        accounts = load_accounts(path)
+        account = (
+            accounts.get(args.account) if args.account is not None else
+            next((item for item in accounts.values() if item.phone == args.phone), None)
         )
-    except ReloginFailed as exc:
+        if account is None:
+            raise ValueError("Xueqiu account is not registered in the project dotenv file")
+        username = playwright_relogin(
+            account, env_path=path, profile_dir=args.profile_dir, total_timeout_seconds=args.timeout,
+        )
+    except (ReloginFailed, ValueError) as exc:
         print(f"Xueqiu relogin failed: {exc}")
         return 1
     return 0 if username else 1
@@ -895,4 +705,3 @@ def main(argv: list[str] | None = None) -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
-

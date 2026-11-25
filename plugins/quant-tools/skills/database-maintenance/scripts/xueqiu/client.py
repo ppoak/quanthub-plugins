@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+from contextlib import contextmanager
 import json
 import os
 import random
@@ -18,15 +19,11 @@ from typing import Any
 
 import duckdb
 
+from scripts.xueqiu.accounts import XueqiuAccount, load_accounts
+
 
 AUTH_ERROR_PATTERNS = ("token", "login", "auth", "unauthorized", "登录", "登陆", "过期", "失效")
 DEFAULT_USER_AGENT = "Xueqiu iPhone 14.91"
-DEFAULT_USER_AGENTS = [
-    "Xueqiu iPhone 14.91",
-    "Xueqiu iPhone 14.90",
-    "Xueqiu iPhone 14.89",
-    "Xueqiu iPhone 14.88",
-]
 EMAIL_RECIPIENT_ENV = "DATABASE_MAINTENANCE_EMAIL_TO"
 PORTFOLIO_URL = "https://stock.xueqiu.com/v5/stock/portfolio/stock/hasexist.json"
 HOT_INFO_URL = "https://stock.xueqiu.com/v5/stock/hot/info.json"
@@ -229,76 +226,53 @@ class TokenInvalidNotifier:
 
 class ClashNodeSwitcher:
     def __init__(
-        self,
-        *,
-        controller: str,
-        secret: str,
-        group: str,
-        node_indices: list[int],
-        tokens: list[str],
+        self, *, controller: str, secret: str, group: str, accounts: list[XueqiuAccount],
     ) -> None:
-        self.controller = controller.rstrip("/")
-        self.secret = secret
-        self.group = group
+        self.url = f"{controller.rstrip('/')}/proxies/{urllib.parse.quote(group, safe='')}"
+        self.headers = {"Authorization": f"Bearer {secret}", "Content-Type": "application/json"}
         self.lock = threading.Lock()
         self.opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
-        self.nodes = self._resolve_nodes(node_indices)
-        if not self.nodes:
-            raise ValueError("No Clash nodes resolved")
-        if len(tokens) != len(self.nodes):
-            raise ValueError(
-                "When Clash switching is enabled, --tokens and --clash-node-indices "
-                "must have the same length so token-node pairs are explicit."
-            )
-        self.routes = list(zip(tokens, self.nodes))
-        self.route_slots = list(range(len(self.routes)))
+        request = urllib.request.Request(self.url, headers=self.headers)
+        with self.opener.open(request, timeout=5) as response:
+            group_info = json.load(response)
+        nodes = group_info.get("all") or []
+        self.default_node = group_info.get("now")
+        if not self.default_node:
+            raise ValueError("Clash group does not expose its current route")
+        self.nodes_by_account = {}
+        for account in accounts:
+            index = account.node_index
+            if index is None:
+                continue
+            if index >= len(nodes):
+                raise ValueError(f"{account.key} has an out-of-range Clash node index")
+            self.nodes_by_account[account.id] = nodes[index]
 
-    def select_random_route(self) -> tuple[str, str]:
-        token, node = random.choice(self.routes)
-        self.switch_to_route(token, node)
-        return token, node
+    @contextmanager
+    def route(self, account: XueqiuAccount):
+        node = self.nodes_by_account.get(account.id, self.default_node)
+        with self.lock:
+            self._switch(node)
+            try:
+                yield
+            finally:
+                if node != self.default_node:
+                    self._switch(self.default_node)
 
-    def choose_random_route(self) -> tuple[str, str]:
-        return random.choice(self.routes)
-
-    def switch_to_route(self, token: str, node: str) -> None:
-        url = f"{self.controller}/proxies/{urllib.parse.quote(self.group, safe='')}"
+    def _switch(self, node: str) -> None:
         request = urllib.request.Request(
-            url,
-            data=json.dumps({"name": node}).encode("utf-8"),
-            method="PUT",
-            headers={
-                "Authorization": f"Bearer {self.secret}",
-                "Content-Type": "application/json",
-            },
+            self.url, data=json.dumps({"name": node}).encode("utf-8"),
+            method="PUT", headers=self.headers,
         )
         with self.opener.open(request, timeout=5) as response:
             if response.status not in (200, 204):
                 raise RuntimeError(f"Failed to switch Clash node, status={response.status}")
 
-    def _resolve_nodes(self, node_indices: list[int]) -> list[str]:
-        request = urllib.request.Request(
-            f"{self.controller}/proxies",
-            headers={"Authorization": f"Bearer {self.secret}"},
-        )
-        with self.opener.open(request, timeout=5) as response:
-            data = json.loads(response.read().decode("utf-8"))
-        group_info = data.get("proxies", {}).get(self.group)
-        if not group_info:
-            raise ValueError(f"Clash proxy group not found: {self.group}")
-        all_nodes = group_info.get("all") or []
-        nodes: list[str] = []
-        for index in node_indices:
-            if index < 0 or index >= len(all_nodes):
-                raise ValueError(f"Clash node index out of range: {index}")
-            nodes.append(all_nodes[index])
-        return nodes
-
 
 class XueqiuClient:
     def __init__(
         self,
-        tokens: list[str],
+        accounts: list[XueqiuAccount],
         *,
         host: str,
         proxy: str | None = None,
@@ -311,26 +285,18 @@ class XueqiuClient:
         retries: int = 3,
         retry_sleep: float = 1.0,
         waf_405_message: str | None = None,
-        pinned_route: tuple[str, str] | None = None,
-        pinned_token: str | None = None,
-        pinned_device_id: str | None = None,
-        user_agents: list[str] | None = None,
-        device_ids: list[str] | None = None,
+        pinned_account: XueqiuAccount | None = None,
     ) -> None:
-        self.tokens = [token for token in tokens if token]
-        if not self.tokens:
-            raise ValueError("Xueqiu token is empty")
+        self.accounts = accounts
+        if not self.accounts:
+            raise ValueError("Xueqiu account token pool is empty")
         self.clash_switcher = clash_switcher
         self.notifier = notifier
         self.timeout = timeout
         self.retries = retries
         self.retry_sleep = retry_sleep
         self.waf_405_message = waf_405_message
-        self.pinned_route = pinned_route
-        self.pinned_token = pinned_token
-        self.pinned_device_id = pinned_device_id
-        self.user_agents = user_agents or []
-        self.device_ids = device_ids or []
+        self.pinned_account = pinned_account
         self.base_headers = {
             "User-Agent": user_agent,
             "Accept": "application/json",
@@ -341,8 +307,6 @@ class XueqiuClient:
         }
         if device_id:
             self.base_headers["x-device-id"] = device_id
-        if pinned_device_id:
-            self.base_headers["x-device-id"] = pinned_device_id
         if proxy:
             self.opener = urllib.request.build_opener(
                 urllib.request.ProxyHandler({"http": proxy, "https": proxy})
@@ -360,22 +324,13 @@ class XueqiuClient:
         for attempt in range(self.retries + 1):
             selected_token: str | None = None
             try:
-                if self.clash_switcher is not None:
-                    with self.clash_switcher.lock:
-                        route_index: int | None = None
-                        if self.pinned_route is not None:
-                            selected_token, node = self.pinned_route
-                            route_index = self.clash_switcher.routes.index(self.pinned_route)
-                            self.clash_switcher.switch_to_route(selected_token, node)
-                        else:
-                            selected_token, node = self.clash_switcher.select_random_route()
-                            route_index = self.clash_switcher.routes.index((selected_token, node))
-                        payload = self._open_request(
-                            request_url, selected_token, route_index=self.clash_switcher.route_slots[route_index],
-                        )
+                account = self.pinned_account or random.choice(self.accounts)
+                selected_token = account.token
+                if self.clash_switcher is None:
+                    payload = self._open_request(request_url, account)
                 else:
-                    selected_token = self.pinned_token or random.choice(self.tokens)
-                    payload = self._open_request(request_url, selected_token)
+                    with self.clash_switcher.route(account):
+                        payload = self._open_request(request_url, account)
                 data = json.loads(payload)
                 self._raise_api_error_if_needed(data, selected_token)
                 return data
@@ -383,7 +338,7 @@ class XueqiuClient:
                 if exc.code == 405 and self.waf_405_message:
                     raise RuntimeError(self.waf_405_message) from exc
                 if exc.code == 401:
-                    token = selected_token or self.tokens[0]
+                    token = selected_token or self.accounts[0].token
                     reason = f"HTTP {exc.code}"
                     self._notify_token_invalid(token, reason)
                     raise TokenInvalidError(token, reason) from exc
@@ -403,13 +358,13 @@ class XueqiuClient:
                 time.sleep(self.retry_sleep * (attempt + 1))
         raise RuntimeError(f"GET {url} failed after retries: {last_error}") from last_error
 
-    def _open_request(self, request_url: str, token: str, *, route_index: int | None = None) -> str:
+    def _open_request(self, request_url: str, account: XueqiuAccount) -> str:
         headers = dict(self.base_headers)
-        if route_index is not None:
-            if self.user_agents:
-                headers["User-Agent"] = self.user_agents[route_index % len(self.user_agents)]
-            if self.device_ids:
-                headers["x-device-id"] = self.device_ids[route_index % len(self.device_ids)]
+        if account.user_agent:
+            headers["User-Agent"] = account.user_agent
+        if account.device_id:
+            headers["x-device-id"] = account.device_id
+        token = account.token
         headers["Cookie"] = f"xq_a_token={token};xq-dj-token={token};xq_is_login=1"
         request = urllib.request.Request(request_url, headers=headers)
         with self.opener.open(request, timeout=self.timeout) as response:
@@ -427,7 +382,7 @@ class XueqiuClient:
         if not has_error:
             return
         if is_auth_error(message):
-            token = selected_token or self.tokens[0]
+            token = selected_token or self.accounts[0].token
             self._notify_token_invalid(token, message)
             raise TokenInvalidError(token, message)
         raise RuntimeError(f"Xueqiu API error: {message}")
@@ -475,108 +430,38 @@ class XueqiuClient:
         return self.get_json(CUBE_TRADE_URL, {"symbol": xueqiu_symbol})
 
 
-def parse_tokens(args: argparse.Namespace, *, preserve_slots: bool = False) -> list[str]:
-    if getattr(args, "tokens", None):
-        slots = [token.strip() for token in args.tokens]
-    else:
-        value = getattr(args, "token", None) or os.environ.get("XUEQIU_TOKENS") or os.environ.get("XUEQIU_TOKEN")
-        slots = [token.strip() for token in value.replace(";", ",").split(",")] if value else []
-    return slots if preserve_slots else [token for token in slots if token]
-
-
-def parse_clash_node_indices(args: argparse.Namespace) -> list[int] | None:
-    indices = getattr(args, "clash_node_indices", None)
-    if indices is None and os.environ.get("XUEQIU_CLASH_NODE_INDICES"):
-        indices = [
-            int(i.strip())
-            for i in os.environ["XUEQIU_CLASH_NODE_INDICES"].replace(";", ",").split(",")
-            if i.strip()
-        ]
-    return indices
-
-
-def build_clash_switcher(tokens: list[str], args: argparse.Namespace) -> ClashNodeSwitcher | None:
-    clash_controller = getattr(args, "clash_controller", None) or os.environ.get("XUEQIU_CLASH_CONTROLLER")
-    clash_secret = getattr(args, "clash_secret", None) or os.environ.get("XUEQIU_CLASH_SECRET")
-    clash_group = getattr(args, "clash_group", None) or os.environ.get("XUEQIU_CLASH_GROUP") or "GLOBAL"
-    clash_indices = parse_clash_node_indices(args)
-    if clash_controller or clash_indices:
-        if not clash_controller or not clash_secret or not clash_indices:
-            raise SystemExit("--clash-controller, --clash-secret, and --clash-node-indices must be provided together.")
-        active_slots = [index for index, token in enumerate(tokens) if token]
-        if any(index >= len(clash_indices) for index in active_slots):
-            raise SystemExit(
-                f"Xueqiu requires at least one Clash node per token: tokens={len(tokens)} "
-                f"nodes={len(clash_indices)}."
-            )
-        # Keep token-node pairing positional while allowing a reusable node pool
-        # to contain more entries than the token set used by this run.
-        clash_indices = [clash_indices[index] for index in active_slots]
-        switcher = ClashNodeSwitcher(
-            controller=clash_controller,
-            secret=clash_secret,
-            group=clash_group,
-            node_indices=clash_indices,
-            tokens=[tokens[index] for index in active_slots],
-        )
-        switcher.route_slots = active_slots
-        print(
-            f"clash_switcher group={clash_group} token_node_pairs={len(switcher.routes)} "
-            "request_node_switching=locked",
-            flush=True,
-        )
-        return switcher
-    return None
-
-
-def parse_list_value(raw: str | None) -> list[str]:
-    if not raw:
-        return []
-    return [item.strip() for item in raw.replace(";", ",").split(",") if item.strip()]
-
-
-def parse_user_agents(args: argparse.Namespace) -> list[str]:
-    values = getattr(args, "user_agents", None)
-    if values:
-        return values
-    env_values = parse_list_value(os.environ.get("XUEQIU_USER_AGENTS"))
-    return env_values or DEFAULT_USER_AGENTS
-
-
-def parse_device_ids(args: argparse.Namespace) -> list[str]:
-    values = getattr(args, "device_ids", None)
-    if values:
-        return values
-    return parse_list_value(os.environ.get("XUEQIU_DEVICE_IDS"))
-
-
-def add_xueqiu_identity_args(parser: argparse.ArgumentParser) -> None:
-    parser.add_argument("--user-agents", nargs="*", default=None, help="User-Agent list bound by route index.")
-    parser.add_argument("--device-ids", nargs="*", default=None, help="Device ID list bound by route index.")
+def build_clash_switcher(
+    accounts: list[XueqiuAccount], args: argparse.Namespace | None = None,
+) -> ClashNodeSwitcher | None:
+    if not any(account.node_index is not None for account in accounts):
+        return None
+    controller = getattr(args, "clash_controller", None) or os.environ.get("XUEQIU_CLASH_CONTROLLER")
+    secret = getattr(args, "clash_secret", None) or os.environ.get("XUEQIU_CLASH_SECRET")
+    group = getattr(args, "clash_group", None) or os.environ.get("XUEQIU_CLASH_GROUP") or "GLOBAL"
+    if not controller or not secret:
+        raise ValueError("Account node indices require a Clash controller and secret")
+    return ClashNodeSwitcher(controller=controller, secret=secret, group=group, accounts=accounts)
 
 
 def add_xueqiu_auth_args(parser: argparse.ArgumentParser, *, default_clash_group: str | None = None) -> None:
-    parser.add_argument("--token", default=None, help="Xueqiu token. Prefer XUEQIU_TOKEN env var.")
-    parser.add_argument("--tokens", nargs="*", default=None, help="Xueqiu token pool. Overrides --token and XUEQIU_TOKEN.")
+    parser.add_argument("--account", help="Use only the named XUEQIU_ACCOUNT_<ID> record.")
     parser.add_argument("--proxy", default=None, help="Optional HTTP(S) proxy URL. Prefer XUEQIU_PROXY env var.")
     parser.add_argument("--clash-controller", default=None, help="Optional Clash controller URL.")
     parser.add_argument("--clash-secret", default=None, help="Optional Clash controller secret.")
     parser.add_argument("--clash-group", default=default_clash_group, help="Clash proxy group to switch.")
-    parser.add_argument(
-        "--clash-node-indices",
-        nargs="*",
-        type=int,
-        default=None,
-        help="Node indices within --clash-group for token-node pairs.",
-    )
 
 
-def create_runtime(args: argparse.Namespace) -> tuple[list[str], str | None, ClashNodeSwitcher | None, TokenInvalidNotifier]:
-    slots = parse_tokens(args, preserve_slots=True)
-    tokens = [token for token in slots if token]
-    if not tokens:
-        raise SystemExit("Xueqiu token is required. Set XUEQIU_TOKEN or pass --token.")
+def create_runtime(
+    args: argparse.Namespace,
+) -> tuple[list[XueqiuAccount], str | None, ClashNodeSwitcher | None, TokenInvalidNotifier]:
+    accounts = load_accounts()
+    selected = getattr(args, "account", None)
+    if selected is not None:
+        if selected not in accounts:
+            raise ValueError(f"Unknown Xueqiu account: {selected}")
+        accounts = {selected: accounts[selected]}
+    active = [account for account in accounts.values() if account.token]
+    if not active:
+        raise ValueError("A registered XUEQIU_ACCOUNT_<ID> with a token is required for collection")
     proxy = getattr(args, "proxy", None) or os.environ.get("XUEQIU_PROXY")
-    clash_switcher = build_clash_switcher(slots, args)
-    notifier = TokenInvalidNotifier()
-    return tokens, proxy, clash_switcher, notifier
+    return active, proxy, build_clash_switcher(active, args), TokenInvalidNotifier()
