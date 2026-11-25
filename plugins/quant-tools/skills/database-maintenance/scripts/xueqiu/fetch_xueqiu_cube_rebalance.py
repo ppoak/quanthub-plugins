@@ -25,7 +25,6 @@ if str(SKILL_ROOT) not in sys.path:
 from scripts.common.scheduler import configure_project, configured_data_root, record_task_output
 
 from scripts.xueqiu.client import (
-    ClashNodeSwitcher,
     TokenInvalidNotifier,
     XueqiuClient,
     add_xueqiu_auth_args,
@@ -218,7 +217,7 @@ def main() -> str:
     args = parse_args()
     universe_date = pd.to_datetime(args.date).date().isoformat()
     data_root = Path(args.data_root)
-    accounts, proxy, clash_switcher, notifier = create_runtime(args)
+    accounts, proxy, notifier = create_runtime(args)
 
     codes = args.codes
     if codes is None:
@@ -231,7 +230,6 @@ def main() -> str:
         accounts,
         host="api.xueqiu.com",
         proxy=proxy,
-        clash_switcher=clash_switcher,
         notifier=notifier,
         accept_language="zh-CN,zh-Hans;q=0.9",
         timeout=args.timeout,
@@ -249,7 +247,6 @@ def main() -> str:
             accounts,
             host="api.xueqiu.com",
             proxy=proxy,
-            clash_switcher=clash_switcher,
             notifier=notifier,
             accept_language="zh-CN,zh-Hans;q=0.9",
             timeout=args.failure_retry_timeout,

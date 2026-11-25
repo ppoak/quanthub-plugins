@@ -30,7 +30,6 @@ from scripts.common.scheduler import configure_project, configured_data_root, re
 
 from scripts.xueqiu.accounts import XueqiuAccount
 from scripts.xueqiu.client import (
-    ClashNodeSwitcher,
     TokenInvalidNotifier,
     XueqiuClient,
     add_xueqiu_auth_args,
@@ -128,14 +127,12 @@ def fetch_status_for_code(
     retries: int,
     sleep_seconds: float,
     proxy: str | None,
-    clash_switcher: ClashNodeSwitcher | None,
     notifier: TokenInvalidNotifier | None,
 ) -> tuple[list[XueqiuStatusRow], int]:
     client = XueqiuClient(
         accounts,
         host="api.xueqiu.com",
         proxy=proxy,
-        clash_switcher=clash_switcher,
         notifier=notifier,
         timeout=timeout,
         retries=retries,
@@ -363,7 +360,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--date", required=True, help="Trade date, format YYYY-MM-DD or YYYYMMDD.")
     parser.add_argument("--data-root", default=configured_data_root("XUEQIU_DATA_ROOT"), help="Data root directory.")
     parser.add_argument("--table-name", default="xueqiu_status", help="Output table name under data root.")
-    add_xueqiu_auth_args(parser, default_clash_group="GLOBAL")
+    add_xueqiu_auth_args(parser)
     parser.add_argument("--codes", nargs="*", default=None, help="Optional code list, e.g. 688008.SH SZ002384.")
     parser.add_argument("--limit", type=int, default=None, help="Optional limit for smoke tests.")
     parser.add_argument("--full-universe", action="store_true", help="Fetch all stocks from quotes_day instead of candidate mode.")
@@ -393,7 +390,7 @@ def main() -> str:
     args = parse_args()
     trade_date = pd.to_datetime(args.date).date().isoformat()
     data_root = Path(args.data_root)
-    accounts, proxy, clash_switcher, notifier = create_runtime(args)
+    accounts, proxy, notifier = create_runtime(args)
 
     codes = args.codes
     if codes is None:
@@ -456,7 +453,6 @@ def main() -> str:
                         retries=args.retries,
                         sleep_seconds=args.sleep,
                         proxy=proxy,
-                        clash_switcher=clash_switcher,
                         notifier=notifier,
                     ): code
                     for code in batch_codes

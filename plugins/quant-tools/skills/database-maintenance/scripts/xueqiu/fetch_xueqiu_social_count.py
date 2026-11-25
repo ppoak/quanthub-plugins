@@ -154,7 +154,7 @@ def main() -> str:
     args = parse_args()
     trade_date = pd.to_datetime(args.date).date().isoformat()
     data_root = Path(args.data_root)
-    accounts, proxy, clash_switcher, notifier = create_runtime(args)
+    accounts, proxy, notifier = create_runtime(args)
 
     codes = args.codes
     if codes is None:
@@ -168,7 +168,6 @@ def main() -> str:
         accounts,
         host="stock.xueqiu.com",
         proxy=proxy,
-        clash_switcher=clash_switcher,
         notifier=notifier,
         device_id=None,
         timeout=args.timeout,
@@ -191,7 +190,6 @@ def main() -> str:
             accounts,
             host="stock.xueqiu.com",
             proxy=proxy,
-            clash_switcher=clash_switcher,
             notifier=notifier,
             device_id=None,
             timeout=args.failure_retry_timeout,

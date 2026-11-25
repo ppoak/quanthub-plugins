@@ -10,6 +10,7 @@ import stat
 import tempfile
 from dataclasses import dataclass, field
 from pathlib import Path
+from urllib.parse import SplitResult, urlsplit
 
 ACCOUNT_PREFIX = "XUEQIU_ACCOUNT_"
 LEGACY_KEYS = {
@@ -23,12 +24,26 @@ class XueqiuAccount:
     id: str
     phone: str
     qr_email: str
-    node_index: int | None
+    proxy_url: str | None = field(repr=False)
     token: str = field(repr=False)
 
     @property
     def key(self) -> str:
         return ACCOUNT_PREFIX + self.id
+
+
+def parse_proxy_url(value: str, setting: str) -> SplitResult:
+    try:
+        url = urlsplit(value)
+        if (
+            url.scheme == "http" and url.hostname and not re.search(r"\s", value)
+            and url.path in {"", "/"} and not url.query and not url.fragment
+            and (url.port is None or url.port > 0)
+        ):
+            return url
+    except ValueError:
+        pass
+    raise ValueError(f"{setting} requires an HTTP proxy URL (http://host:port)")
 
 
 def _parse_accounts(lines: list[str]) -> dict[str, XueqiuAccount]:
@@ -56,18 +71,18 @@ def _parse_accounts(lines: list[str]) -> dict[str, XueqiuAccount]:
             raise ValueError("Xueqiu account IDs must contain uppercase letters, digits or underscores")
         parts = [part.strip() for part in value.split(",", 3)]
         if len(parts) != 4:
-            raise ValueError(f"{key} must contain phone, QR email, node index and token")
-        phone, email, node, token = parts
+            raise ValueError(f"{key} must contain phone, QR email, proxy URL and token")
+        phone, email, proxy_url, token = parts
         if not re.fullmatch(r"[0-9]{4,}", phone) or not re.fullmatch(r"[^@\s]+@[^@\s]+", email):
             raise ValueError(f"{key} requires a valid phone and QR email")
-        if node and not re.fullmatch(r"[0-9]+", node):
-            raise ValueError(f"{key} requires a nonnegative Clash node index or an empty node")
+        if proxy_url:
+            parse_proxy_url(proxy_url, key)
         if phone in phones or (token and token in tokens):
             raise ValueError(f"{key} duplicates another account phone or token")
         phones.add(phone)
         tokens.add(token)
         accounts[account_id] = XueqiuAccount(
-            account_id, phone, email, int(node) if node else None, token,
+            account_id, phone, email, proxy_url or None, token,
         )
     if not accounts and any(entries.get(key) or os.environ.get(key) for key in LEGACY_KEYS):
         raise ValueError("Migrate the legacy Xueqiu lists to XUEQIU_ACCOUNT_<ID> records")
@@ -152,7 +167,7 @@ def replace_account_token(path: str | Path, account: XueqiuAccount, token: str) 
                 continue
             value = line.rstrip("\r\n")
             newline = line[len(value):]
-            phone, email, node, old_token = value.split(",", 3)
+            phone, email, proxy_url, old_token = value.split(",", 3)
             _, _, raw_value = line.partition("=")
             quote = raw_value.lstrip()[:1]
             suffix = old_token[len(old_token.rstrip()):]
@@ -163,7 +178,7 @@ def replace_account_token(path: str | Path, account: XueqiuAccount, token: str) 
             padding = previous[:len(previous) - len(previous.lstrip())]
             content = previous[len(padding):]
             suffix = content[len(content.rstrip()):] + suffix
-            lines[index] = f"{phone},{email},{node},{padding}{token}{suffix}{newline}"
+            lines[index] = f"{phone},{email},{proxy_url},{padding}{token}{suffix}{newline}"
             break
 
         fd, name = tempfile.mkstemp(dir=path.parent, prefix=f".{path.name}.", suffix=".tmp")
