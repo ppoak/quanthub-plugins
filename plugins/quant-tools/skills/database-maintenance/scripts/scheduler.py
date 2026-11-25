@@ -12,6 +12,7 @@ import sys
 import time
 from dataclasses import dataclass
 from pathlib import Path
+from functools import partial
 from typing import Callable
 from uuid import uuid4
 
@@ -35,6 +36,8 @@ from scripts.common.scheduler import (
     send_task_summary,
     setup_logger,
 )
+
+from scripts.xueqiu.email_relogin import watch_token_file
 
 
 @dataclass(frozen=True)
@@ -171,6 +174,7 @@ def run_job(
     calendar: TradeCalendar,
     logger: logging.Logger,
     dry_run: bool,
+    reload_xueqiu_tokens: Callable[[], None] | None = None,
 ) -> int:
     task_logger = logging.LoggerAdapter(
         logger,
@@ -206,6 +210,8 @@ def run_job(
             job.script_path,
         )
         try:
+            if reload_xueqiu_tokens and not dry_run and job.name.startswith("xueqiu_"):
+                reload_xueqiu_tokens()
             return_code = _run_script_main(
                 job=job,
                 target_date=target_date,
@@ -552,6 +558,7 @@ def main(argv: list[str] | None = None) -> None:
                 f"trade_date_required={int(job.require_trade_date)}"
             )
         return
+    execute_job = partial(run_job, reload_xueqiu_tokens=watch_token_file(repo_root / ".env"))
     logger = setup_logger("DatabaseMaintenanceScheduler")
     all_jobs = build_jobs()
     jobs = filter_enabled_jobs(all_jobs)
@@ -579,7 +586,7 @@ def main(argv: list[str] | None = None) -> None:
             if name in selected_names:
                 exit_code = max(
                     exit_code,
-                    run_job(
+                    execute_job(
                         job=jobs[name],
                         target_date=target_date,
                         repo_root=repo_root,
@@ -599,7 +606,7 @@ def main(argv: list[str] | None = None) -> None:
         today = scheduler_now(timezone_name).date()
         for name in jobs:
             if name in run_on_start:
-                run_job(
+                execute_job(
                     job=jobs[name],
                     target_date=today,
                     repo_root=repo_root,
@@ -635,7 +642,7 @@ def main(argv: list[str] | None = None) -> None:
                     job_name,
                     scheduled_at.isoformat(sep=" "),
                 )
-                run_job(
+                execute_job(
                     job=jobs[job_name],
                     target_date=scheduled_at.date(),
                     repo_root=repo_root,

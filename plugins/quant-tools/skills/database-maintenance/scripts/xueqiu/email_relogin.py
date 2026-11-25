@@ -3,6 +3,11 @@
 from __future__ import annotations
 
 import argparse
+import contextlib
+import ctypes
+import ssl
+import stat
+import tempfile
 import imaplib
 import os
 import re
@@ -18,14 +23,16 @@ from email import message_from_bytes
 from email.header import decode_header
 from email.message import EmailMessage
 from email.utils import make_msgid
+from html.parser import HTMLParser
 from pathlib import Path
 from typing import Callable
 
 
 AUTH_ROOT = Path(".tmp/database-maintenance/xueqiu-auth")
 DEFAULT_PROFILE_DIR = AUTH_ROOT / "browser"
-ACCOUNT_BIND_URL = "https://xueqiu.com/account/bind/show.json"
-USER_SHOW_URL = "https://xueqiu.com/user/show.json"
+XUEQIU_ORIGIN = "https://www.xueqiu.com"
+ACCOUNT_BIND_URL = f"{XUEQIU_ORIGIN}/account/bind/show.json"
+USER_SHOW_URL = f"{XUEQIU_ORIGIN}/user/show.json"
 
 
 def send_qr_email(
@@ -34,6 +41,7 @@ def send_qr_email(
     qr_path: str | Path,
     *,
     sequence: int,
+    deadline: float | None = None,
 ) -> tuple[str, str]:
     """Send one newly generated QR image and return its request identifiers."""
     sender = os.environ["SENDER"]
@@ -43,13 +51,16 @@ def send_qr_email(
     message = EmailMessage()
     message["From"] = sender
     message["To"] = recipient
+    reply_to = os.environ.get("XUEQIU_IMAP_USERNAME") or sender
+    if reply_to != sender:
+        message["Reply-To"] = reply_to
     request_id = uuid.uuid4().hex[:8].upper()
     suffix = phone[-4:]
     message["Message-ID"] = make_msgid()
     message["Subject"] = f"Xueqiu QR login | {suffix} | {request_id} | {sequence}"
     message.set_content(
         "Please scan the attached Xueqiu login QR code with the Xueqiu App and confirm login.\n"
-        "If the QR code has expired or you need a new one, reply to this email with a single line: 刷新\n"
+        "If the QR code has expired or you need a new one, reply to the latest QR email with a single line: 刷新\n"
         f"Request ID: {request_id}\nPhone suffix: {suffix}\n"
     )
     qr_file = Path(qr_path)
@@ -58,80 +69,112 @@ def send_qr_email(
         filename=f"xueqiu-login-{suffix}-{sequence}.png",
     )
     use_ssl = os.environ.get("SMTP_USE_SSL", "1").lower() not in {"0", "false", "no"}
-    if use_ssl:
-        with smtplib.SMTP_SSL(server, port, timeout=30) as smtp:
-            smtp.login(sender, password)
-            smtp.send_message(message)
-    else:
-        with smtplib.SMTP(server, port, timeout=30) as smtp:
-            smtp.starttls()
-            smtp.login(sender, password)
-            smtp.send_message(message)
+    tls = ssl.create_default_context()
+    timeout = _request_timeout(30, deadline)
+    connection = (
+        smtplib.SMTP_SSL(server, port, timeout=timeout, context=tls)
+        if use_ssl else smtplib.SMTP(server, port, timeout=timeout)
+    )
+    with connection as smtp:
+        if not use_ssl:
+            smtp.sock.settimeout(_request_timeout(30, deadline))
+            smtp.starttls(context=tls)
+        smtp.sock.settimeout(_request_timeout(30, deadline))
+        smtp.login(sender, password)
+        smtp.sock.settimeout(_request_timeout(30, deadline))
+        smtp.send_message(message)
     return request_id, message["Message-ID"] or ""
 
 
+class _ReplyHTML(HTMLParser):
+    """Read the new reply and stop at common quoted-message wrappers."""
+
+    def __init__(self):
+        super().__init__()
+        self.chunks: list[str] = []
+        self.quoted = False
+
+    def handle_starttag(self, tag, attrs):
+        markers = " ".join(value or "" for key, value in attrs if key in {"class", "id"}).lower()
+        if tag in {"blockquote", "hr"} or any(
+            marker in markers for marker in ("gmail_quote", "yahoo_quoted", "divrplyfwdmsg", "moz-cite-prefix", "qqmail_quote")
+        ):
+            self.quoted = True
+        if tag in {"div", "p", "br", "li"} and not self.quoted:
+            self.chunks.append("\n")
+
+    def handle_data(self, data):
+        if not self.quoted:
+            self.chunks.append(data)
+
+
 def _message_text(message) -> str:
-    chunks: list[str] = []
-    for part in message.walk():
-        if part.get_content_type() not in {"text/plain", "text/html"}:
-            continue
-        if part.get_content_disposition() == "attachment":
-            continue
-        payload = part.get_payload(decode=True) or b""
-        body = payload.decode(part.get_content_charset() or "utf-8", errors="replace")
-        if part.get_content_type() == "text/html":
-            body = re.sub(r"<[^>]+>", "\n", body)
-        chunks.append(body)
-    return "\n".join(chunks)
+    from email import policy
+
+    body = message_from_bytes(message.as_bytes(), policy=policy.default).get_body(
+        preferencelist=("plain", "html")
+    )
+    if body is None or body.get_content_disposition() == "attachment":
+        return ""
+    text = body.get_content()
+    if body.get_content_subtype() == "html":
+        parser = _ReplyHTML()
+        parser.feed(text)
+        text = "".join(parser.chunks)
+    return re.split(
+        r"(?im)^\s*(?:>|On .+ wrote:|[- ]*Original Message[- ]*|[- ]*原始邮件[- ]*|From:|发件人[:：])",
+        text, maxsplit=1,
+    )[0]
 
 
 def _is_refresh_reply(body: str) -> bool:
-    """Accept an explicit refresh command, excluding quoted email instructions."""
-    return bool(re.search(r"(?m)^\s*(?:刷新|refresh|重新发送|重发二维码)\s*$", body, re.IGNORECASE))
+    return body.strip().casefold() in {"刷新", "refresh", "重新发送", "重发二维码"}
 
 
 def poll_refresh_request(
-    *,
-    request_ids: set[str],
-    seen_message_ids: set[str],
+    *, request_id: str, outbound_message_id: str, seen_message_ids: set[bytes],
+    deadline: float | None = None,
 ) -> str | None:
-    """Return the matching request id when a user replies with a refresh command."""
-    username = os.environ.get("XUEQIU_IMAP_USERNAME", os.environ["SENDER"])
-    password = os.environ.get("XUEQIU_IMAP_PASSWORD", os.environ["EMAIL_PASSWORD"])
+    username = os.environ.get("XUEQIU_IMAP_USERNAME") or os.environ["SENDER"]
+    password = os.environ.get("XUEQIU_IMAP_PASSWORD") or os.environ["EMAIL_PASSWORD"]
     server = os.environ.get("XUEQIU_IMAP_SERVER", "imap.qq.com")
     port = int(os.environ.get("XUEQIU_IMAP_PORT", "993"))
-    with imaplib.IMAP4_SSL(server, port, timeout=30) as mailbox:
+    with imaplib.IMAP4_SSL(
+        server, port, timeout=_request_timeout(30, deadline), ssl_context=ssl.create_default_context(),
+    ) as mailbox:
+        mailbox.sock.settimeout(_request_timeout(30, deadline))
         mailbox.login(username, password)
+        mailbox.sock.settimeout(_request_timeout(30, deadline))
         mailbox.select("INBOX", readonly=True)
         candidates: set[bytes] = set()
-        for request_id in request_ids:
-            status, data = mailbox.search(None, "HEADER", "Subject", request_id)
+        for header, value in (
+            ("Subject", request_id), ("In-Reply-To", outbound_message_id), ("References", outbound_message_id),
+        ):
+            mailbox.sock.settimeout(_request_timeout(30, deadline))
+            status, data = mailbox.uid("SEARCH", None, "HEADER", header, f'"{value}"')
             if status != "OK":
-                raise RuntimeError("IMAP inbox search failed")
+                raise imaplib.IMAP4.error("IMAP inbox search failed")
             candidates.update(data[0].split())
-        for sequence_id in sorted(candidates, key=int, reverse=True):
-            status, raw = mailbox.fetch(sequence_id, "(BODY.PEEK[])")
+        for uid in sorted(candidates - seen_message_ids, key=int, reverse=True):
+            mailbox.sock.settimeout(_request_timeout(30, deadline))
+            status, raw = mailbox.uid("FETCH", uid, "(BODY.PEEK[])")
             if status != "OK":
-                raise RuntimeError("IMAP message fetch failed")
+                raise imaplib.IMAP4.error("IMAP message fetch failed")
             message = message_from_bytes(raw[0][1])
-            message_id = message.get("Message-ID", "")
-            if message_id and message_id in seen_message_ids:
-                continue
-            if message_id:
-                seen_message_ids.add(message_id)
             subject = "".join(
                 part.decode(charset or "utf-8", errors="replace") if isinstance(part, bytes) else part
                 for part, charset in decode_header(message.get("Subject", ""))
             )
-            thread = f"{message.get('In-Reply-To', '')} {message.get('References', '')}"
-            matched_id = next(
-                (request_id for request_id in request_ids
-                 if re.search(rf"(?<![A-Za-z0-9]){re.escape(request_id)}(?![A-Za-z0-9])", subject)
-                 or request_id in thread),
-                None,
+            direct = re.findall(r"<[^<>]+>", str(message.get("In-Reply-To", "")))
+            references = re.findall(r"<[^<>]+>", str(message.get("References", "")))
+            thread_parent = (direct or references)[-1:]
+            matches = (
+                thread_parent == [outbound_message_id] if thread_parent else
+                bool(re.search(rf"(?<![A-Za-z0-9]){re.escape(request_id)}(?![A-Za-z0-9])", subject))
             )
-            if matched_id and _is_refresh_reply(_message_text(message)):
-                return matched_id
+            seen_message_ids.add(uid)
+            if matches and _is_refresh_reply(_message_text(message)):
+                return request_id
     return None
 
 
@@ -243,15 +286,18 @@ def verify_token_account(
 
 
 def _record_account_summary(phone: str, value: str) -> None:
+    label = phone if phone.startswith("slot ") else phone[-4:]
+    if value.startswith("FAILED:"):
+        print(f"xueqiu_account_result account={label} {value}", flush=True)
     try:
         from scripts.common.scheduler import record_task_output
     except ImportError:
         return
-    record_task_output(f"Xueqiu account {phone[-4:]}", value, None, operation="account")
+    record_task_output(f"Xueqiu account {label}", value, None, operation="account")
 
 
 def _token_values() -> list[str]:
-    return _ordered_values("XUEQIU_TOKENS") or _ordered_values("XUEQIU_TOKEN")
+    return _credential_slots(os.environ)
 
 
 def scheduled_relogin(
@@ -259,13 +305,17 @@ def scheduled_relogin(
     env_path: str | Path = ".env", profile_dir: str | Path | None = None,
 ) -> bool:
     targets = configured_login_targets()
-    if not targets:
-        print("xueqiu_relogin_targets=0")
-        return True
     tokens = _token_values()
+    configured_slots = {index for index, _, _ in targets}
+    missing_phones = [index for index, token in enumerate(tokens) if token and index not in configured_slots]
+    for index in missing_phones:
+        _record_account_summary(f"slot {index}", "FAILED: Token has no configured phone")
+    if not targets and not missing_phones:
+        print("xueqiu_relogin_skipped reason=no_configured_accounts")
+        return True
     proxy = os.environ.get("XUEQIU_PROXY")
     validation_timeout = int(os.environ.get("XUEQIU_RELOGIN_VERIFY_TIMEOUT", "20"))
-    success = True
+    success = not missing_phones
     for token_index, phone, recipient in targets:
         print(f"xueqiu_account_check token_index={token_index} phone_suffix={phone[-4:]}")
         try:
@@ -314,36 +364,138 @@ def scheduled_relogin(
     return success
 
 
+def _dotenv_entries(path: Path) -> dict[str, str]:
+    entries: dict[str, str] = {}
+    if path.exists():
+        for line in path.read_text(encoding="utf-8-sig").splitlines():
+            key, separator, value = line.partition("=")
+            if separator and key.strip() and not key.lstrip().startswith("#"):
+                entries.setdefault(key.strip(), value.strip().strip("\"'"))
+    return entries
+
+
+def _credential_slots(entries) -> list[str]:
+    value = entries.get("XUEQIU_TOKENS") or entries.get("XUEQIU_TOKEN")
+    return _split_slots(value) if value else []
+
+
+def _slot(slots: list[str], index: int) -> str:
+    return slots[index] if index < len(slots) else ""
+
+
+def _set_slot(slots: list[str], index: int, value: str) -> None:
+    slots.extend([""] * (index + 1 - len(slots)))
+    slots[index] = value
+
+
+def _publish_tokens(slots: list[str]) -> None:
+    os.environ["XUEQIU_TOKENS"] = ",".join(slots)
+    os.environ["XUEQIU_TOKEN"] = _slot(slots, 0)
+
+
+def watch_token_file(path: Path) -> Callable[[], None]:
+    """Keep startup overrides until the corresponding file slot changes."""
+    previous = _credential_slots(_dotenv_entries(path))
+
+    def reload() -> None:
+        nonlocal previous
+        current = _credential_slots(_dotenv_entries(path))
+        if current == previous:
+            return
+        active = _token_values()
+        for index in range(max(len(previous), len(current))):
+            if _slot(current, index) != _slot(previous, index):
+                _set_slot(active, index, _slot(current, index))
+        _publish_tokens(active)
+        previous = current
+
+    return reload
+
+
+@contextlib.contextmanager
+def _token_write_lock(path: Path):
+    lock_dir = path.parent / ".tmp"
+    lock_dir.mkdir(exist_ok=True)
+    with (lock_dir / (path.name + ".lock")).open("a+b") as lock:
+        lock.seek(0)
+        if os.name == "nt":
+            import msvcrt
+            msvcrt.locking(lock.fileno(), msvcrt.LK_LOCK, 1)
+        else:
+            import fcntl
+            fcntl.flock(lock, fcntl.LOCK_EX)
+        yield
+
+
+def _copy_token_file_permissions(source: Path, target: Path) -> None:
+    if not source.exists():
+        return
+    if os.name != "nt":
+        target.chmod(stat.S_IMODE(source.stat().st_mode))
+        return
+
+    from ctypes import wintypes
+
+    security = ctypes.WinDLL("advapi32", use_last_error=True)
+    get_security = security.GetFileSecurityW
+    get_security.argtypes = (
+        wintypes.LPCWSTR, wintypes.DWORD, ctypes.c_void_p, wintypes.DWORD,
+        ctypes.POINTER(wintypes.DWORD),
+    )
+    set_security = security.SetFileSecurityW
+    set_security.argtypes = (wintypes.LPCWSTR, wintypes.DWORD, ctypes.c_void_p)
+    get_control = security.GetSecurityDescriptorControl
+    get_control.argtypes = (
+        ctypes.c_void_p, ctypes.POINTER(wintypes.WORD), ctypes.POINTER(wintypes.DWORD),
+    )
+    dacl = 0x4
+    needed = wintypes.DWORD()
+    get_security(str(source), dacl, None, 0, ctypes.byref(needed))
+    if not needed.value:
+        raise ctypes.WinError(ctypes.get_last_error())
+    descriptor = ctypes.create_string_buffer(needed.value)
+    if not get_security(str(source), dacl, descriptor, needed, ctypes.byref(needed)):
+        raise ctypes.WinError(ctypes.get_last_error())
+    control = wintypes.WORD()
+    revision = wintypes.DWORD()
+    if not get_control(descriptor, ctypes.byref(control), ctypes.byref(revision)):
+        raise ctypes.WinError(ctypes.get_last_error())
+    inheritance = 0x80000000 if control.value & 0x1000 else 0x20000000
+    if not set_security(str(target), dacl | inheritance, descriptor):
+        raise ctypes.WinError(ctypes.get_last_error())
+
+
 def replace_token_in_env(token: str, token_index: int = 0, env_path: str | Path = ".env") -> None:
-    path = Path(env_path)
-    lines = path.read_text(encoding="utf-8-sig").splitlines()
-    values: list[str] | None = None
-    legacy_token = ""
-    output: list[str] = []
-    for line in lines:
-        if line.startswith("XUEQIU_TOKENS="):
-            raw_values = line.split("=", 1)[1].strip().strip("\"'")
-            values = _split_slots(raw_values)
-            while len(values) <= token_index:
-                values.append("")
-            values[token_index] = token
-            line = "XUEQIU_TOKENS=" + ",".join(values)
-        elif line.startswith("XUEQIU_TOKEN="):
-            legacy_token = line.split("=", 1)[1].strip().strip("\"'")
-            if token_index == 0:
-                line = "XUEQIU_TOKEN=" + token
-        output.append(line)
-    if values is None:
-        values = [""] * (token_index + 1)
-        values[0] = legacy_token
-        values[token_index] = token
-        output.append("XUEQIU_TOKENS=" + ",".join(values))
-    temporary = path.with_suffix(path.suffix + ".tmp")
-    temporary.write_text("\n".join(output) + "\n", encoding="utf-8")
-    temporary.replace(path)
-    os.environ["XUEQIU_TOKENS"] = ",".join(values)
-    if token_index == 0:
-        os.environ["XUEQIU_TOKEN"] = token
+    path = Path(env_path).resolve()
+    with _token_write_lock(path):
+        file_slots = _credential_slots(_dotenv_entries(path))
+        active_slots = _token_values() or file_slots.copy()
+        _set_slot(file_slots, token_index, token)
+        _set_slot(active_slots, token_index, token)
+        output = []
+        pool_written = False
+        for line in path.read_text(encoding="utf-8-sig").splitlines() if path.exists() else []:
+            key, separator, _ = line.partition("=")
+            if separator and key.strip() == "XUEQIU_TOKENS":
+                if not pool_written:
+                    output.append("XUEQIU_TOKENS=" + ",".join(file_slots))
+                    pool_written = True
+            elif separator and key.strip() == "XUEQIU_TOKEN" and token_index == 0:
+                output.append("XUEQIU_TOKEN=" + token)
+            else:
+                output.append(line)
+        if not pool_written:
+            output.append("XUEQIU_TOKENS=" + ",".join(file_slots))
+        fd, name = tempfile.mkstemp(dir=path.parent, prefix=f".{path.name}.", suffix=".tmp")
+        os.close(fd)
+        temporary = Path(name)
+        try:
+            _copy_token_file_permissions(path, temporary)
+            temporary.write_text("\n".join(output) + "\n", encoding="utf-8")
+            temporary.replace(path)
+        finally:
+            temporary.unlink(missing_ok=True)
+        _publish_tokens(active_slots)
 
 
 def log_progress(stage: str, **details: object) -> None:
@@ -354,13 +506,13 @@ def log_progress(stage: str, **details: object) -> None:
 
 def _session_cookie(context) -> str:
     return next(
-        (item["value"] for item in context.cookies(["https://xueqiu.com"]) if item["name"] == "xq_a_token"),
+        (item["value"] for item in context.cookies([XUEQIU_ORIGIN]) if item["name"] == "xq_a_token"),
         "",
     )
 
 
 def session_token(
-    context, phone: str, *, timeout_ms: int, deadline: float | None = None,
+    context, phone: str, *, timeout_ms: int, deadline: float | None = None, reject_session: bool = False,
 ) -> tuple[str, str] | None:
     from playwright.sync_api import Error
 
@@ -390,25 +542,27 @@ def session_token(
     except AccountIdentityMismatch:
         raise
     except AuthenticationFailed:
+        if reject_session:
+            raise
         return None
     return token, username
 
 
 def _open_qr_login(page) -> None:
-    page.goto("https://xueqiu.com/", wait_until="domcontentloaded", timeout=30_000)
+    page.goto(f"{XUEQIU_ORIGIN}/", wait_until="domcontentloaded", timeout=30_000)
     page.get_by_text("二维码登录", exact=True).filter(visible=True).first.click(timeout=30_000)
 
 
-def _qr_wrapper(page):
+def _qr_wrapper(page, deadline: float | None = None):
     wrapper = page.locator('[class*="index_qrcode__wrapper"]').first
-    wrapper.wait_for(state="visible", timeout=20_000)
+    wrapper.wait_for(state="visible", timeout=_request_timeout(20, deadline) * 1000)
     return wrapper
 
 
-def _capture_qr(page, output_dir: Path, sequence: int) -> Path:
-    wrapper = _qr_wrapper(page)
+def _capture_qr(page, output_dir: Path, sequence: int, *, deadline: float | None = None) -> Path:
+    wrapper = _qr_wrapper(page, deadline)
     canvas = wrapper.locator("canvas").first
-    canvas.wait_for(state="visible", timeout=20_000)
+    canvas.wait_for(state="visible", timeout=_request_timeout(20, deadline) * 1000)
     page.wait_for_function(
         """() => {
             const wrapper = document.querySelector('[class*="index_qrcode__wrapper"]');
@@ -421,15 +575,16 @@ def _capture_qr(page, output_dir: Path, sequence: int) -> Path:
             }
             return false;
         }""",
-        timeout=20_000,
+        timeout=_request_timeout(20, deadline) * 1000,
     )
-    box = canvas.bounding_box()
+    box = canvas.bounding_box(timeout=_request_timeout(20, deadline) * 1000)
     if box is None:
         raise RuntimeError("Xueqiu login QR code bounds are unavailable")
     output_dir.mkdir(parents=True, exist_ok=True)
     path = output_dir / f"qrcode-{sequence}.png"
     page.screenshot(
         path=str(path),
+        timeout=_request_timeout(20, deadline) * 1000,
         clip={
             "x": max(0, box["x"] - 16),
             "y": max(0, box["y"] - 16),
@@ -441,21 +596,25 @@ def _capture_qr(page, output_dir: Path, sequence: int) -> Path:
     return path
 
 
-def _qr_state(page) -> str:
+def _qr_state(page, *, deadline: float | None = None) -> str:
     try:
-        return _qr_wrapper(page).inner_text(timeout=1_000).strip()
+        return _qr_wrapper(page, deadline).inner_text(timeout=_request_timeout(1, deadline) * 1000).strip()
     except Exception:
         return ""
 
 
-def _refresh_qr(page) -> None:
-    previous_image = _qr_wrapper(page).locator("canvas").first.evaluate("canvas => canvas.toDataURL()")
+def _refresh_qr(page, *, deadline: float | None = None) -> None:
+    previous_image = _qr_wrapper(page, deadline).locator("canvas").first.evaluate(
+        "canvas => canvas.toDataURL()", timeout=_request_timeout(20, deadline) * 1000,
+    )
     refresh = page.get_by_text("点击刷新二维码", exact=True).filter(visible=True).first
     try:
-        refresh.click(timeout=2_000)
+        refresh.click(timeout=_request_timeout(2, deadline) * 1000)
     except Exception:
-        page.reload(wait_until="domcontentloaded", timeout=30_000)
-        page.get_by_text("二维码登录", exact=True).filter(visible=True).first.click(timeout=30_000)
+        page.reload(wait_until="domcontentloaded", timeout=_request_timeout(30, deadline) * 1000)
+        page.get_by_text("二维码登录", exact=True).filter(visible=True).first.click(
+            timeout=_request_timeout(30, deadline) * 1000,
+        )
     page.wait_for_function(
         """previous => {
             const wrapper = document.querySelector('[class*="index_qrcode__wrapper"]');
@@ -464,7 +623,7 @@ def _refresh_qr(page) -> None:
             return canvas && canvas.toDataURL() !== previous;
         }""",
         arg=previous_image,
-        timeout=20_000,
+        timeout=_request_timeout(20, deadline) * 1000,
     )
 
 
@@ -493,8 +652,7 @@ def playwright_relogin(
     run_dir = AUTH_ROOT / "qr-email" / f"account-{account_key}"
     run_dir.mkdir(parents=True, exist_ok=True)
     sequence = 0
-    request_ids: set[str] = set()
-    seen_message_ids: set[str] = set()
+    seen_message_ids: set[bytes] = set()
     next_mail_poll = 0.0
     qr_expired = False
 
@@ -511,8 +669,8 @@ def playwright_relogin(
         stage = "browser session verification"
         try:
             try:
-                verified = session_token(context, phone, timeout_ms=30_000)
-            except AccountIdentityMismatch:
+                verified = session_token(context, phone, timeout_ms=30_000, reject_session=True)
+            except AuthenticationFailed:
                 stage = "discarding the existing session"
                 existing_pages = list(context.pages)
                 page = context.new_page()
@@ -521,9 +679,8 @@ def playwright_relogin(
                 context.clear_cookies()
                 devtools = context.new_cdp_session(page)
                 try:
-                    devtools.send("Storage.clearDataForOrigin", {
-                        "origin": "https://xueqiu.com", "storageTypes": "all",
-                    })
+                    for origin in (XUEQIU_ORIGIN, "https://xueqiu.com"):
+                        devtools.send("Storage.clearDataForOrigin", {"origin": origin, "storageTypes": "all"})
                 finally:
                     devtools.detach()
                 verified = None
@@ -542,19 +699,19 @@ def playwright_relogin(
             qr_path = _capture_qr(page, run_dir, sequence)
             stage = "sending the QR login email"
             try:
-                request_id, _ = send_qr_email(phone, recipient, qr_path, sequence=sequence)
+                request_id, outbound_message_id = send_qr_email(phone, recipient, qr_path, sequence=sequence)
             finally:
                 qr_path.unlink(missing_ok=True)
-            request_ids.add(request_id)
             qr_started_at = time.monotonic()
             deadline = qr_started_at + total_timeout_seconds
             log_progress("qr_email_sent", sequence=sequence, request_id=request_id)
 
             next_identity_poll = 0.0
             last_identity_error = None
+            last_mail_error = None
             while time.monotonic() < deadline:
                 stage = "waiting for QR login"
-                page.wait_for_timeout(1_000)
+                page.wait_for_timeout(min(1000, max(0, (deadline - time.monotonic()) * 1000)))
                 if time.monotonic() >= deadline:
                     break
                 verified = None
@@ -577,7 +734,7 @@ def playwright_relogin(
                     print("xueqiu_relogin_success=1", flush=True)
                     return username
 
-                state = _qr_state(page)
+                state = _qr_state(page, deadline=deadline)
                 if not qr_expired and ("刷新二维码" in state or "失效" in state):
                     qr_expired = True
                     log_progress("qr_expired", sequence=sequence,
@@ -586,30 +743,50 @@ def playwright_relogin(
                 if time.monotonic() >= next_mail_poll:
                     stage = "checking for a QR refresh reply"
                     next_mail_poll = time.monotonic() + 5
-                    refresh_id = poll_refresh_request(
-                        request_ids=request_ids,
-                        seen_message_ids=seen_message_ids,
-                    )
+                    try:
+                        refresh_id = poll_refresh_request(
+                            request_id=request_id, outbound_message_id=outbound_message_id,
+                            seen_message_ids=seen_message_ids, deadline=deadline,
+                        )
+                    except (OSError, imaplib.IMAP4.error, IdentityUnavailable) as exc:
+                        last_mail_error = type(exc).__name__
+                        log_progress("refresh_mail_retry", error_type=last_mail_error)
+                        continue
                     if refresh_id is not None:
+                        stage = "refreshing the QR login email"
                         if time.monotonic() >= deadline:
                             break
-                        stage = "refreshing the QR login email"
-                        _refresh_qr(page)
-                        sequence += 1
-                        qr_path = _capture_qr(page, run_dir, sequence)
                         try:
-                            request_id, _ = send_qr_email(phone, recipient, qr_path, sequence=sequence)
-                        finally:
-                            qr_path.unlink(missing_ok=True)
-                        request_ids.add(request_id)
+                            _refresh_qr(page, deadline=deadline)
+                            if time.monotonic() >= deadline:
+                                break
+                            sequence += 1
+                            qr_path = _capture_qr(page, run_dir, sequence, deadline=deadline)
+                            try:
+                                if time.monotonic() >= deadline:
+                                    break
+                                request_id, outbound_message_id = send_qr_email(
+                                    phone, recipient, qr_path, sequence=sequence, deadline=deadline,
+                                )
+                            finally:
+                                qr_path.unlink(missing_ok=True)
+                        except Exception:
+                            if time.monotonic() >= deadline:
+                                break
+                            raise
                         qr_started_at = time.monotonic()
                         qr_expired = False
                         log_progress("qr_refresh_email_sent", sequence=sequence, request_id=request_id)
 
             log_progress("completed", result="FAILED", reason="qr_login_timeout", timeout_seconds=total_timeout_seconds)
             print("xueqiu_relogin_success=0", flush=True)
+            details = []
             if last_identity_error:
-                raise ReloginFailed(f"QR login timed out after identity verification failed: {last_identity_error}")
+                details.append(f"identity verification: {last_identity_error}")
+            if last_mail_error:
+                details.append(f"refresh mailbox: {last_mail_error}")
+            if details:
+                raise ReloginFailed("QR login timed out. " + ". ".join(details))
             return None
         except ReloginFailed:
             raise
@@ -619,19 +796,15 @@ def playwright_relogin(
             detail = str(exc) if isinstance(exc, (AccountIdentityMismatch, IdentityUnavailable)) else type(exc).__name__
             raise ReloginFailed(f"{stage.capitalize()} failed: {detail}") from exc
         finally:
-            context.close()
+            try:
+                context.close()
+            except Exception as exc:
+                log_progress("browser_cleanup_failed", error_type=type(exc).__name__)
 
 
 def load_dotenv(path: str | Path) -> None:
-    env_path = Path(path)
-    if not env_path.exists():
-        return
-    for raw_line in env_path.read_text(encoding="utf-8-sig").splitlines():
-        line = raw_line.strip()
-        if not line or line.startswith("#") or "=" not in line:
-            continue
-        key, value = line.split("=", 1)
-        os.environ.setdefault(key.strip(), value.strip().strip('"').strip("'"))
+    for key, value in _dotenv_entries(Path(path)).items():
+        os.environ.setdefault(key, value)
 
 
 def _split_slots(value: str) -> list[str]:
@@ -649,10 +822,13 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument(
         "--check-accounts",
         action="store_true",
-        help="Verify every configured account and relogin accounts whose identity check fails.",
+        help=(
+            "Verify each account. Request QR login for missing or rejected tokens or a phone mismatch "
+            "using the configured account recipient. Report service errors and ambiguous identities."
+        ),
     )
     parser.add_argument("--token-index", type=int, help="Token position in XUEQIU_TOKENS (zero-based)")
-    parser.add_argument("--recipient", help="Recipient of the QR login email")
+    parser.add_argument("--recipient", help="QR login email recipient for manual single-account login")
     parser.add_argument("--env-path", default=".env", help="Project dotenv path")
     parser.add_argument("--profile-dir", help="Root directory for persistent per-account login profiles")
     parser.add_argument("--timeout", type=int, default=600, help="Maximum login wait in seconds")
@@ -676,6 +852,11 @@ def resolve_login_target(args: argparse.Namespace) -> tuple[int, str | None]:
     if token_index < 0:
         raise ValueError("--token-index must be non-negative")
     recipient = args.recipient
+    if not matches:
+        if _slot(phones, token_index) or _slot(_token_values(), token_index):
+            raise ValueError("Token slot is already assigned to another configured phone")
+        if not recipient:
+            raise ValueError("Unconfigured phones require an explicit --recipient")
     if recipient is None and token_index < len(recipients):
         recipient = recipients[token_index]
     if not recipient:

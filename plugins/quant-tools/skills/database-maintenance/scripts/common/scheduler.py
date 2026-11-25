@@ -6,6 +6,7 @@ import logging
 import os
 import re
 import smtplib
+import ssl
 import time
 import urllib.request
 from email.message import EmailMessage
@@ -224,12 +225,12 @@ def send_scheduler_email(
 
     try:
         if use_ssl:
-            with smtplib.SMTP_SSL(smtp_server, smtp_port, timeout=20) as smtp:
+            with smtplib.SMTP_SSL(smtp_server, smtp_port, timeout=20, context=ssl.create_default_context()) as smtp:
                 smtp.login(sender, password)
                 smtp.send_message(message, to_addrs=[recipient])
         else:
             with smtplib.SMTP(smtp_server, smtp_port, timeout=20) as smtp:
-                smtp.starttls()
+                smtp.starttls(context=ssl.create_default_context())
                 smtp.login(sender, password)
                 smtp.send_message(message, to_addrs=[recipient])
     except Exception as exc:  # noqa: BLE001 - scheduler notification must not mask job result.

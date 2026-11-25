@@ -5,6 +5,7 @@ import json
 import os
 import random
 import smtplib
+import ssl
 import threading
 import time
 import urllib.error
@@ -54,12 +55,12 @@ def send_email(
     use_ssl: bool,
 ) -> None:
     if use_ssl:
-        with smtplib.SMTP_SSL(server, port, timeout=20) as smtp:
+        with smtplib.SMTP_SSL(server, port, timeout=20, context=ssl.create_default_context()) as smtp:
             smtp.login(sender, password)
             smtp.send_message(message)
         return
     with smtplib.SMTP(server, port, timeout=20) as smtp:
-        smtp.starttls()
+        smtp.starttls(context=ssl.create_default_context())
         smtp.login(sender, password)
         smtp.send_message(message)
 
@@ -250,6 +251,7 @@ class ClashNodeSwitcher:
                 "must have the same length so token-node pairs are explicit."
             )
         self.routes = list(zip(tokens, self.nodes))
+        self.route_slots = list(range(len(self.routes)))
 
     def select_random_route(self) -> tuple[str, str]:
         token, node = random.choice(self.routes)
@@ -368,7 +370,9 @@ class XueqiuClient:
                         else:
                             selected_token, node = self.clash_switcher.select_random_route()
                             route_index = self.clash_switcher.routes.index((selected_token, node))
-                        payload = self._open_request(request_url, selected_token, route_index=route_index)
+                        payload = self._open_request(
+                            request_url, selected_token, route_index=self.clash_switcher.route_slots[route_index],
+                        )
                 else:
                     selected_token = self.pinned_token or random.choice(self.tokens)
                     payload = self._open_request(request_url, selected_token)
@@ -471,11 +475,13 @@ class XueqiuClient:
         return self.get_json(CUBE_TRADE_URL, {"symbol": xueqiu_symbol})
 
 
-def parse_tokens(args: argparse.Namespace) -> list[str]:
+def parse_tokens(args: argparse.Namespace, *, preserve_slots: bool = False) -> list[str]:
     if getattr(args, "tokens", None):
-        return args.tokens
-    token = getattr(args, "token", None) or os.environ.get("XUEQIU_TOKENS") or os.environ.get("XUEQIU_TOKEN")
-    return [t.strip() for t in str(token or "").replace(";", ",").split(",") if t.strip()]
+        slots = [token.strip() for token in args.tokens]
+    else:
+        value = getattr(args, "token", None) or os.environ.get("XUEQIU_TOKENS") or os.environ.get("XUEQIU_TOKEN")
+        slots = [token.strip() for token in value.replace(";", ",").split(",")] if value else []
+    return slots if preserve_slots else [token for token in slots if token]
 
 
 def parse_clash_node_indices(args: argparse.Namespace) -> list[int] | None:
@@ -497,21 +503,23 @@ def build_clash_switcher(tokens: list[str], args: argparse.Namespace) -> ClashNo
     if clash_controller or clash_indices:
         if not clash_controller or not clash_secret or not clash_indices:
             raise SystemExit("--clash-controller, --clash-secret, and --clash-node-indices must be provided together.")
-        if len(clash_indices) < len(tokens):
+        active_slots = [index for index, token in enumerate(tokens) if token]
+        if any(index >= len(clash_indices) for index in active_slots):
             raise SystemExit(
                 f"Xueqiu requires at least one Clash node per token: tokens={len(tokens)} "
                 f"nodes={len(clash_indices)}."
             )
         # Keep token-node pairing positional while allowing a reusable node pool
         # to contain more entries than the token set used by this run.
-        clash_indices = clash_indices[: len(tokens)]
+        clash_indices = [clash_indices[index] for index in active_slots]
         switcher = ClashNodeSwitcher(
             controller=clash_controller,
             secret=clash_secret,
             group=clash_group,
             node_indices=clash_indices,
-            tokens=tokens,
+            tokens=[tokens[index] for index in active_slots],
         )
+        switcher.route_slots = active_slots
         print(
             f"clash_switcher group={clash_group} token_node_pairs={len(switcher.routes)} "
             "request_node_switching=locked",
@@ -564,10 +572,11 @@ def add_xueqiu_auth_args(parser: argparse.ArgumentParser, *, default_clash_group
 
 
 def create_runtime(args: argparse.Namespace) -> tuple[list[str], str | None, ClashNodeSwitcher | None, TokenInvalidNotifier]:
-    tokens = parse_tokens(args)
+    slots = parse_tokens(args, preserve_slots=True)
+    tokens = [token for token in slots if token]
     if not tokens:
         raise SystemExit("Xueqiu token is required. Set XUEQIU_TOKEN or pass --token.")
     proxy = getattr(args, "proxy", None) or os.environ.get("XUEQIU_PROXY")
-    clash_switcher = build_clash_switcher(tokens, args)
+    clash_switcher = build_clash_switcher(slots, args)
     notifier = TokenInvalidNotifier()
     return tokens, proxy, clash_switcher, notifier
