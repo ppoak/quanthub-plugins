@@ -22,13 +22,10 @@ from scripts.common.scheduler import configure_project, configured_data_root, re
 from scripts.xueqiu.client import (
     XueqiuClient,
     add_xueqiu_auth_args,
-    add_xueqiu_identity_args,
     create_runtime,
     normalize_code,
     optional_int,
     optional_int_from_float,
-    parse_device_ids,
-    parse_user_agents,
 )
 
 
@@ -60,7 +57,6 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--data-root", default=configured_data_root("XUEQIU_DATA_ROOT"), help="Data root directory.")
     parser.add_argument("--table-name", default="xueqiu_hot_rank", help="Output table name.")
     add_xueqiu_auth_args(parser)
-    add_xueqiu_identity_args(parser)
     parser.add_argument("--timeout", type=float, default=20.0, help="HTTP timeout seconds.")
     parser.add_argument("--retries", type=int, default=3, help="Retries per endpoint.")
     parser.add_argument("--hot-size", type=int, default=100, help="Hot stock list size. Xueqiu currently caps it at 100.")
@@ -145,24 +141,18 @@ def main() -> str:
     args = parse_args()
     target_date = pd.to_datetime(args.date).date().isoformat()
     data_root = Path(args.data_root)
-    tokens, proxy, clash_switcher, notifier = create_runtime(args)
-    user_agents = parse_user_agents(args)
-    device_ids = parse_device_ids(args)
-    print(f"user_agent_pool={len(user_agents)} device_id_pool={len(device_ids)} route_identity_binding=1", flush=True)
+    accounts, proxy, clash_switcher, notifier = create_runtime(args)
     print(f"fetch_start table={args.table_name} date={target_date} rank_types={args.hot_rank_types}")
 
     client = XueqiuClient(
-        tokens,
+        accounts,
         host="stock.xueqiu.com",
         proxy=proxy,
         clash_switcher=clash_switcher,
         notifier=notifier,
-        user_agent=user_agents[0] if user_agents else "Xueqiu iPhone 14.91",
         device_id=None,
         timeout=args.timeout,
         retries=args.retries,
-        user_agents=user_agents,
-        device_ids=device_ids,
     )
     df = fetch_hot_rank(
         client=client,

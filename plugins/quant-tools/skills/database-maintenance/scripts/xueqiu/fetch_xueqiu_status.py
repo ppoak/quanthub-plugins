@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import html
 import re
+import random
 import shutil
 import sys
 import time
@@ -27,18 +28,16 @@ if str(SKILL_ROOT) not in sys.path:
 
 from scripts.common.scheduler import configure_project, configured_data_root, record_task_output
 
+from scripts.xueqiu.accounts import XueqiuAccount
 from scripts.xueqiu.client import (
     ClashNodeSwitcher,
     TokenInvalidNotifier,
     XueqiuClient,
     add_xueqiu_auth_args,
-    add_xueqiu_identity_args,
     create_runtime,
     load_codes_from_quotes_day,
     normalize_code,
     optional_int,
-    parse_device_ids,
-    parse_user_agents,
     to_xueqiu_symbol,
 )
 
@@ -48,12 +47,7 @@ from scripts.xueqiu.client import (
 CHINA_TZ = ZoneInfo("Asia/Shanghai")
 HTML_TAG_RE = re.compile(r"<[^>]+>")
 WHITESPACE_RE = re.compile(r"\s+")
-DEFAULT_STATUS_USER_AGENTS = [
-    "Xueqiu iPhone 14.91",
-    "Xueqiu iPhone 14.90",
-    "Xueqiu iPhone 14.89",
-    "Xueqiu iPhone 14.88",
-]
+
 
 
 @dataclass(frozen=True)
@@ -125,7 +119,7 @@ def status_to_row(
 
 def fetch_status_for_code(
     *,
-    tokens: list[str],
+    accounts: list[XueqiuAccount],
     code: str,
     trade_date: str,
     max_pages: int,
@@ -136,25 +130,17 @@ def fetch_status_for_code(
     proxy: str | None,
     clash_switcher: ClashNodeSwitcher | None,
     notifier: TokenInvalidNotifier | None,
-    user_agents: list[str],
-    device_ids: list[str],
 ) -> tuple[list[XueqiuStatusRow], int]:
-    pinned_route = None
-    if clash_switcher is not None:
-        pinned_route = clash_switcher.choose_random_route()
     client = XueqiuClient(
-        tokens,
+        accounts,
         host="api.xueqiu.com",
         proxy=proxy,
         clash_switcher=clash_switcher,
         notifier=notifier,
-        user_agent=user_agents[0] if user_agents else DEFAULT_STATUS_USER_AGENTS[0],
         timeout=timeout,
         retries=retries,
         waf_405_message="Xueqiu request blocked by WAF with HTTP 405",
-        pinned_route=pinned_route,
-        user_agents=user_agents,
-        device_ids=device_ids,
+        pinned_account=random.choice(accounts),
     )
     normalized = normalize_code(code)
     symbol = to_xueqiu_symbol(normalized)
@@ -385,7 +371,6 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--candidate-social-limit", type=int, default=300, help="Top discussions stocks from xueqiu_social_count.")
     parser.add_argument("--candidate-hot-limit", type=int, default=300, help="Hot-rank stocks from xueqiu_hot_rank.")
     parser.add_argument("--candidate-cube-limit", type=int, default=200, help="Top cube-rebalance stocks from latest available xueqiu_cube_rebalance date.")
-    add_xueqiu_identity_args(parser)
     parser.add_argument("--start-index", type=int, default=0, help="Zero-based start index in the resolved code list.")
     parser.add_argument("--part-index", type=int, default=0, help="Starting output part index.")
     parser.add_argument("--workers", type=int, default=4, help="Concurrent symbol workers.")
@@ -408,10 +393,7 @@ def main() -> str:
     args = parse_args()
     trade_date = pd.to_datetime(args.date).date().isoformat()
     data_root = Path(args.data_root)
-    tokens, proxy, clash_switcher, notifier = create_runtime(args)
-    user_agents = parse_user_agents(args)
-    device_ids = parse_device_ids(args)
-    print(f"user_agent_pool={len(user_agents)} device_id_pool={len(device_ids)} route_identity_binding=1", flush=True)
+    accounts, proxy, clash_switcher, notifier = create_runtime(args)
 
     codes = args.codes
     if codes is None:
@@ -465,7 +447,7 @@ def main() -> str:
                 futures = {
                     executor.submit(
                         fetch_status_for_code,
-                        tokens=tokens,
+                        accounts=accounts,
                         code=code,
                         trade_date=trade_date,
                         max_pages=args.max_pages,
@@ -476,8 +458,6 @@ def main() -> str:
                         proxy=proxy,
                         clash_switcher=clash_switcher,
                         notifier=notifier,
-                        user_agents=user_agents,
-                        device_ids=device_ids,
                     ): code
                     for code in batch_codes
                 }

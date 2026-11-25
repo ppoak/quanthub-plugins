@@ -24,12 +24,9 @@ from scripts.common.scheduler import configure_project, configured_data_root, re
 from scripts.xueqiu.client import (
     XueqiuClient,
     add_xueqiu_auth_args,
-    add_xueqiu_identity_args,
     create_runtime,
     load_codes_from_quotes_day,
     normalize_code,
-    parse_device_ids,
-    parse_user_agents,
     to_xueqiu_symbol,
 )
 
@@ -52,7 +49,6 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--data-root", default=configured_data_root("XUEQIU_DATA_ROOT"), help="Data root directory.")
     parser.add_argument("--table-name", default="xueqiu_social_count", help="Output table name.")
     add_xueqiu_auth_args(parser)
-    add_xueqiu_identity_args(parser)
     parser.add_argument("--codes", nargs="*", default=None, help="Optional code list, e.g. 000001.SZ SZ301439.")
     parser.add_argument("--limit", type=int, default=None, help="Optional limit for smoke tests.")
     parser.add_argument("--workers", type=int, default=2, help="Concurrent fetch workers.")
@@ -158,10 +154,7 @@ def main() -> str:
     args = parse_args()
     trade_date = pd.to_datetime(args.date).date().isoformat()
     data_root = Path(args.data_root)
-    tokens, proxy, clash_switcher, notifier = create_runtime(args)
-    user_agents = parse_user_agents(args)
-    device_ids = parse_device_ids(args)
-    print(f"user_agent_pool={len(user_agents)} device_id_pool={len(device_ids)} route_identity_binding=1", flush=True)
+    accounts, proxy, clash_switcher, notifier = create_runtime(args)
 
     codes = args.codes
     if codes is None:
@@ -172,17 +165,14 @@ def main() -> str:
 
     print(f"fetch_start table={args.table_name} date={trade_date} symbols={len(codes)} workers={args.workers}")
     client = XueqiuClient(
-        tokens,
+        accounts,
         host="stock.xueqiu.com",
         proxy=proxy,
         clash_switcher=clash_switcher,
         notifier=notifier,
-        user_agent=user_agents[0] if user_agents else "Xueqiu iPhone 14.91",
         device_id=None,
         timeout=args.timeout,
         retries=args.retries,
-        user_agents=user_agents,
-        device_ids=device_ids,
     )
     rows, failures = fetch_codes(
         client=client,
@@ -198,17 +188,14 @@ def main() -> str:
             break
         retry_codes = [code for code, _ in remaining_failures]
         retry_client = XueqiuClient(
-            tokens,
+            accounts,
             host="stock.xueqiu.com",
             proxy=proxy,
             clash_switcher=clash_switcher,
             notifier=notifier,
-            user_agent=user_agents[0] if user_agents else "Xueqiu iPhone 14.91",
             device_id=None,
             timeout=args.failure_retry_timeout,
             retries=args.failure_retry_retries,
-            user_agents=user_agents,
-            device_ids=device_ids,
         )
         print(
             f"retry_start round={retry_round} symbols={len(retry_codes)} "

@@ -9,7 +9,7 @@
 | `scripts/xueqiu/fetch_xueqiu_hot_rank.py` | 采集热榜结果并写入日分区。 |
 | `scripts/xueqiu/fetch_xueqiu_status.py` | 采集雪球状态评论并写入日分区。 |
 | `scripts/xueqiu/fetch_xueqiu_cube_rebalance.py` | 采集组合调仓买卖次数并写入日分区。 |
-| `scripts/xueqiu/email_relogin.py` | 保存认证状态，并按 ID token 临期状态执行邮件二维码重登录；同时提供可被外部 scheduler 调用的函数和 CLI。 |
+| `scripts/xueqiu/email_relogin.py` | 实时核对账号身份，按需通过邮件二维码重登录，并按账号键更新项目配置文件中的 Token。 |
 | `scripts/scheduler.py` | 统一登记雪球采集与认证任务，按设定日期和交易日运行。 |
 
 ## 访问配置
@@ -17,17 +17,22 @@
 在项目根目录 `.env` 中配置：
 
 ```dotenv
-XUEQIU_TOKENS=<token1>,<token2>
+# 手机号,二维码收件邮箱,Clash 节点编号,Token
+XUEQIU_ACCOUNT_0650='13800000650,a@example.com,2,token_a'
+XUEQIU_ACCOUNT_B='13800000002,b@example.com,,'
 XUEQIU_PROXY=http://127.0.0.1:7890
 XUEQIU_CLASH_CONTROLLER=http://127.0.0.1:<controller-port>
 XUEQIU_CLASH_SECRET=<controller-secret>
 XUEQIU_CLASH_GROUP=GLOBAL
-XUEQIU_CLASH_NODE_INDICES=<index1>,<index2>
-XUEQIU_USER_AGENTS=<ua1>,<ua2>
-XUEQIU_DEVICE_IDS=<device-id1>,<device-id2>
 ```
 
-`XUEQIU_TOKENS` 与 `XUEQIU_CLASH_NODE_INDICES` 按位置配对。每个 token 对应一个代理节点；节点数量少于 token 数时，脚本返回配置错误。状态和评论分页请求期间，每只股票保持 token、节点、User-Agent 和设备 ID 的固定组合。Token 失效与任务运行通知使用共享 SMTP 配置和收件人。
+ID 使用大写字母、数字或下划线。手机号和邮箱必填，节点是从零开始的编号，留空时走默认代理路由。Token 留空时，该账号可用二维码续登，取得 Token 后才参与采集。只按前三个英文逗号拆分账号记录，Token 中其余逗号原样保留。状态和评论分页始终使用同一账号。
+
+### 从旧配置迁移
+
+1. 核对每个手机号实际对应的邮箱、节点和 Token，再按上述格式把这些字段写入同一条账号记录。
+2. 从项目 `.env` 移除旧的手机号、邮箱、Token、节点及请求身份并行列表。保留共享代理、Clash 控制器和邮件服务配置。只存在旧配置时，脚本会提示迁移。
+3. 使用新版脚本时，采集、验号和续登每次都从项目 `.env` 读取账号记录。账号记录以文件为准，常驻调度在下一次雪球任务开始时读到独立进程写回的新值。单账号采集使用 `--account <ID>`。
 
 默认调度设置：
 
@@ -44,12 +49,10 @@ XUEQIU_STATUS_SLEEP=1.0
 XUEQIU_STATUS_RETRIES=1
 XUEQIU_STATUS_MAX_PAGES=20
 XUEQIU_STATUS_CANDIDATE_LIMIT=200
-XUEQIU_LOGIN_PHONES=<phone1>,<phone2>
-XUEQIU_LOGIN_EMAILS=<login-mailbox1>,<login-mailbox2>
 XUEQIU_RELOGIN_SCHEDULE_TIME=22:00
 XUEQIU_RELOGIN_SCHEDULE_DAYS=all
-XUEQIU_RELOGIN_THRESHOLD_DAYS=5
 XUEQIU_RELOGIN_TIMEOUT=600
+XUEQIU_RELOGIN_VERIFY_TIMEOUT=20
 ```
 
 调度器在同一任务执行时间跨越后续任务的情况下，按 `DATABASE_MAINTENANCE_MISFIRE_GRACE_SECONDS` 配置的窗口补运行到期任务。
@@ -93,9 +96,11 @@ uv run --locked python "<path-to-skill>/scripts/xueqiu/fetch_xueqiu_cube_rebalan
 
 ### 它做什么
 
-重登录会打开 Chrome，把二维码发到邮箱，等用户扫码，然后把新的 token 写回 `.env`。
+调度器逐账号调用雪球账号绑定和用户信息接口，核对手机号并获取雪球用户名。token 缺失、被雪球拒绝或手机号不匹配时，可通过 Chrome 二维码重登录。接口暂时不可用或掩码手机号匹配多个账号时，任务会记录该账号的失败原因并继续检查其他账号。重登录成功后，新 Token 按账号键写回项目配置。下一次雪球任务会读取最新文件。
 
-二维码是否过期，以雪球页面为准。过期后不会自己发送新码；请回复对应的登录邮件，正文单独写 `刷新`，程序才会发送新二维码。从第一封二维码邮件发出后开始等十分钟，刷新不会重新计时；超时未完成就结束本次登录，保留原 token，等待下一次运行。
+调度器邮件会用独立表格行展示每个账号的手机号尾号和雪球用户名。验证或重登录失败时，用户名位置显示失败原因。
+
+二维码是否过期以雪球页面为准。需要换码时，回复最近一封二维码邮件并在本次回复正文中只写 `刷新`。等待时间从第一封邮件发出后开始计算，默认十分钟。刷新沿用同一个截止时间，超时后结束本次登录并保留原 token。
 
 ### 需要哪些文件
 
@@ -119,40 +124,37 @@ SENDER=<发送邮件的邮箱>
 EMAIL_PASSWORD=<邮箱授权码>
 SMTP_SERVER=smtp.qq.com
 
-XUEQIU_LOGIN_PHONES=<手机号1>,<手机号2>
-XUEQIU_LOGIN_EMAILS=<邮箱1>,<邮箱2>
-XUEQIU_TOKENS=<token1>,<token2>
+XUEQIU_ACCOUNT_0650='13800000650,a@example.com,,'
 
 XUEQIU_RELOGIN_SCHEDULE_TIME=22:00
 XUEQIU_RELOGIN_SCHEDULE_DAYS=all
-XUEQIU_RELOGIN_THRESHOLD_DAYS=5
 XUEQIU_RELOGIN_TIMEOUT=600
 ```
 
-相同位置的内容属于同一个账号：第一个手机号、第一封邮箱、第一枚 token 是一组。三行的数量必须一样。`EMAIL_PASSWORD` 填邮箱授权码，不是邮箱登录密码。
+二维码发往该账号记录中的收件地址。`EMAIL_PASSWORD` 填邮箱授权码。
 
-上面的示例使用 QQ 邮箱发信。其他邮箱还需设置 `XUEQIU_IMAP_SERVER` 为该邮箱的收信服务器；收信账号和授权码默认与发信相同。
+上面的示例使用 QQ 邮箱发信。其他邮箱还需设置 `XUEQIU_IMAP_SERVER` 为该邮箱的收信服务器。收信账号和授权码默认与发信相同。分开配置时，将 `XUEQIU_IMAP_USERNAME` 设为轮询邮箱的地址，二维码邮件会将该地址用作回复地址。
 
 ### 手动登录
 
 在项目根目录运行：
 
 ```sh
-uv run --locked python "<path-to-skill>/scripts/xueqiu/email_relogin.py" "<完整手机号>" --env-path .env --timeout 600
+uv run --locked python "<path-to-skill>/scripts/xueqiu/email_relogin.py" --account 0650 --env-path .env --timeout 600
 ```
 
 然后：
 
 1. 等待二维码邮件。
 2. 用雪球 App 扫码并确认；同一部手机上可以先保存图片，再从相册识别。
-3. 如果二维码过期，回复原邮件，正文只写 `刷新`。
+3. 如果二维码过期，回复最近一封二维码邮件，正文只写 `刷新`。
 4. 收到新邮件后再扫码。
 
-程序会检查登录后的手机号。手机号不对时，不会覆盖原来的 token。
+程序核对登录后的手机号，再在写入锁内复核账号记录。通过后只更新该账号行的 Token，并保留文件权限。
 
 ### 按时间自动登录
 
-每个账号先按上面的命令手动登录一次，程序才会留下到期记录。定时任务只检查已有记录中即将到期或上次登录失败的账号；默认提前五天检查，仍然登录着就直接复用。
+定时任务逐个检查已登记账号。也可以使用 `--check-accounts` 运行同一流程。手动续登可按账号 ID 或已登记的完整手机号选择账号。
 
 查看任务：
 

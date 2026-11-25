@@ -140,12 +140,12 @@ EMAIL_PASSWORD=<smtp-password>
 SMTP_SERVER=<smtp-server>
 SMTP_PORT=465
 SMTP_USE_SSL=1
-XUEQIU_LOGIN_PHONES=<phone1>,<phone2>
-XUEQIU_LOGIN_EMAILS=<login-mailbox1>,<login-mailbox2>
+# phone,qr_email,clash_node_index,token
+XUEQIU_ACCOUNT_0650='<phone>,<qr-mailbox>,,<token>'
 XUEQIU_RELOGIN_SCHEDULE_TIME=22:00
 XUEQIU_RELOGIN_SCHEDULE_DAYS=all
-XUEQIU_RELOGIN_THRESHOLD_DAYS=5
 XUEQIU_RELOGIN_TIMEOUT=600
+XUEQIU_RELOGIN_VERIFY_TIMEOUT=20
 ```
 
 `DATABASE_MAINTENANCE_ENABLED_JOBS` 和 `DATABASE_MAINTENANCE_RUN_ON_START` 支持 `all` 或逗号分隔的任务名。dry-run 时可将 `DATABASE_MAINTENANCE_NOTIFY=0` 设为静默运行。`DATABASE_MAINTENANCE_MISFIRE_GRACE_SECONDS` 设置长任务跨过后续任务时间时的补运行窗口。邮件发件凭据和收件人保存在 `.env`。
@@ -161,6 +161,7 @@ XUEQIU_RELOGIN_TIMEOUT=600
 - 小范围验证使用 `_test` 表名；验证结束后清理测试表。
 - 调整采集路径、字段、分区、数据契约或调度任务时，同步更新本 skill 和对应来源参考文档。
 - 将凭据、数据、日志、临时文件与下载包留在 Git 忽略范围，仓库提交脚本和说明文档。
+- 雪球重登录通知逐账号列出手机号尾号及已核验的雪球用户名或最终失败原因。任一账号失败时，调度任务和邮件状态为 Failed。
 
 ## 验证
 
