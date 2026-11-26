@@ -19,6 +19,7 @@
 | `FACTOR_EVALUATE_PRICE_COL` | `close_post` | 收益计算使用的价格列。 |
 | `FACTOR_EVALUATE_QUANTILES` | `10` | 分层组合数量，至少为 2。 |
 | `FACTOR_EVALUATE_TOP_PERCENTILE` | `1.0` | Top/Bottom 组合的百分位范围，取值为 `(0, 50]`。 |
+| `FACTOR_EVALUATE_MISSING_SIGNAL` | `hold` | 缺少有效调仓信号时保留持仓。可选 `liquidate` 在计划调仓日清仓。 |
 | `FACTOR_EVALUATE_ROLLING_MEAN_DAYS` | `20` | `rolling_mean` 使用的滚动交易日窗口，包含当日。 |
 | `FACTOR_EVALUATE_NEUTRALIZATION_INDUSTRY_LEVEL` | `first_industry_code` | 中性化使用的行业层级，可选 `first_industry_code`、`second_industry_code` 或 `third_industry_code`。 |
 

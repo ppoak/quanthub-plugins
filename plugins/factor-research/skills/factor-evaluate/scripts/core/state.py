@@ -67,6 +67,7 @@ class _EvaluationStateMixin:
         return {
             "begin": self.begin,
             "portfolio_accounting": PORTFOLIO_ACCOUNTING,
+            "missing_signal": self.cfg.missing_signal,
             "horizon_days": self.cfg.horizon_days,
             "execution_lag_days": self.cfg.execution_lag_days,
             "price_col": self.cfg.price_col,
@@ -198,6 +199,7 @@ class _EvaluationStateMixin:
                 FROM (
                     SELECT factor_column, variant, portfolio_id, layer, date
                     FROM _evaluation_returns
+                    WHERE observations > 0
                     UNION ALL
                     SELECT factor_column, variant, portfolio_id, layer, last_date
                     FROM _layer_nav_seed

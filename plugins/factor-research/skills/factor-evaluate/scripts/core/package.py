@@ -84,6 +84,7 @@ def refresh_evaluations(
     end: str | None = None,
     settings: EvaluationSettings | None = None,
     daily_parameters: Mapping[str, Any] | None = None,
+    rebuild: bool = False,
 ) -> list[Path]:
     """Refresh a complete package, initializing missing evaluation records."""
 
@@ -146,6 +147,7 @@ def refresh_evaluations(
             ),
             references,
             str(parameters.get("direction", "auto")),
+            str(parameters.get("missing_signal", settings.missing_signal)),
         )
         groups.setdefault(key, []).append(column)
     results: list[Path] = []
@@ -163,12 +165,14 @@ def refresh_evaluations(
             industry_level,
             references,
             direction,
+            missing_signal,
         ) = key
         result = run_package_evaluation(
             EvaluationConfig(
                 factor_name=factor_name,
                 storage_factor_name=storage_factor_name,
                 direction=direction,
+                missing_signal=missing_signal,
                 begin=str(begin),
                 train_end=train_end,
                 validation_end=validation_end,
@@ -193,6 +197,7 @@ def refresh_evaluations(
                 project_root=root,
                 settings=settings,
                 daily_update=daily_update,
+                rebuild=rebuild,
             )
         )
         results.append(result)

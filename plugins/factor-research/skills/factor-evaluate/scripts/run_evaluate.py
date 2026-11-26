@@ -2,7 +2,7 @@
 import os
 from argparse import SUPPRESS, ArgumentParser, Namespace
 from pathlib import Path
-from core.shared import EvaluationSettings, _read_dotenv
+from core.shared import EvaluationSettings, MISSING_SIGNAL_POLICIES, _read_dotenv
 from core.evaluation import run
 
 
@@ -11,7 +11,6 @@ def add_arguments(parser: ArgumentParser) -> None:
 
     parser.add_argument("--project-root", default=".")
     parser.add_argument("--task", action="append", choices=("ic", "portfolio", "correlation"))
-    mode = parser.add_mutually_exclusive_group()
 
     source = parser.add_mutually_exclusive_group(required=True)
     source.add_argument(
@@ -21,7 +20,7 @@ def add_arguments(parser: ArgumentParser) -> None:
     )
     source.add_argument("--factor-package", action="append", default=[])
     source.add_argument("--factor-data", metavar="DIRECTORY", help="Read scores from this Hive Parquet directory.")
-    mode.add_argument(
+    parser.add_argument(
         "--refresh",
         action="store_true",
         help="Refresh existing canonical evaluation artifacts for one factor.",
@@ -35,6 +34,8 @@ def add_arguments(parser: ArgumentParser) -> None:
     parser.add_argument("--train-end", default=None)
     parser.add_argument("--validation-end", default=None)
     parser.add_argument("--direction", type=str.lower, choices=("positive", "negative", "auto"), default=None)
+    parser.add_argument("--missing-signal", choices=MISSING_SIGNAL_POLICIES,
+        help="Hold or liquidate at a scheduled rebalance without a valid score (default: hold).")
     parser.add_argument("--end", default=None)
     parser.add_argument("--horizon-days", type=int, default=None)
     parser.add_argument("--execution-lag-days", type=int, default=None)
@@ -81,7 +82,7 @@ def add_arguments(parser: ArgumentParser) -> None:
             "The default of 1 bounds memory per logical column."
         ),
     )
-    mode.add_argument(
+    parser.add_argument(
         "--rebuild",
         action="store_true",
         help="Rebuild canonical evaluation artifacts from the requested begin date.",
@@ -93,6 +94,7 @@ def add_arguments(parser: ArgumentParser) -> None:
 def _apply_settings(args: Namespace, settings: EvaluationSettings) -> None:
     defaults = {
         "direction": settings.direction,
+        "missing_signal": settings.missing_signal,
         "begin": settings.begin,
         "train_end": settings.train_end,
         "validation_end": settings.validation_end,
@@ -125,8 +127,8 @@ def main():
     root = Path(args.project_root).resolve()
     settings = EvaluationSettings.from_project_root(root)
     if args.daily_update:
-        if not args.refresh or (args.operation and "readme" in args.operation):
-            parser.error("--daily-update requires --refresh and cannot write README")
+        if not args.refresh or args.rebuild or (args.operation and "readme" in args.operation):
+            parser.error("--daily-update requires --refresh and cannot rebuild or write README")
         dotenv = _read_dotenv(root / ".env")
         args.daily_parameters = {}
         for option, stored_key in (
@@ -134,7 +136,7 @@ def main():
             ("validation_end", "validation_end"), ("horizon_days", "horizon_days"),
             ("execution_lag_days", "execution_lag_days"), ("price_col", "price_col"),
             ("quantiles", "quantiles"), ("top_percentile", "top_percentile"),
-            ("rolling_mean_days", "rolling_mean_days"),
+            ("rolling_mean_days", "rolling_mean_days"), ("missing_signal", "missing_signal"),
             ("neutralization_industry_level", "industry_level"),
         ):
             env_key = f"FACTOR_EVALUATE_{option.upper()}"

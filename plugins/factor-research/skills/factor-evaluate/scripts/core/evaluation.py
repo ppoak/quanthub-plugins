@@ -61,6 +61,7 @@ def _config_from_args(
         storage_factor_name=args.storage_factor_name,
         factor_data=args.factor_data,
         direction=args.direction,
+        missing_signal=args.missing_signal,
         begin=args.begin,
         train_end=args.train_end,
         validation_end=args.validation_end,
@@ -495,7 +496,8 @@ def run(args: Namespace, *, project_root: str | Path) -> int:
                 output_root=args.output_dir, factor_zoo_root=args.factor_zoo_root,
                 threads=args.threads, memory_limit=args.memory_limit,
                 temp_directory=args.temp_directory, end=args.end, settings=args.settings,
-                daily_parameters=getattr(args, "daily_parameters", None))
+                daily_parameters=getattr(args, "daily_parameters", None),
+                rebuild=args.rebuild)
             result = 0
         elif args.workers == 1:
             result = _run_sequential(args, factor_names=names, project_root=root)

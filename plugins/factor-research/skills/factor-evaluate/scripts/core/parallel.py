@@ -181,6 +181,16 @@ def _prepare_candidate_panel(
             process_end=process_dates[-1],
             materialize=False,
         )
+        if cfg.missing_signal == "liquidate":
+            signal_dates = storage.sql_literal((workspace / "signal_dates.parquet").as_posix())
+            storage.execute(
+                f"""
+                COPY (
+                    SELECT DISTINCT factor_column, date FROM {engine._factor_variants_relation}
+                    WHERE variant = 'raw'
+                ) TO {signal_dates} (FORMAT PARQUET)
+                """
+            )
         factor_column = storage.sql_literal(factor_columns[0])
         storage.execute(
             f"""
@@ -407,8 +417,10 @@ def _run_metric_job(
     candidate_glob: str,
     returns_glob: str,
     shard_directory: Path,
+    signal_dates_path: Path,
 ) -> tuple[Path, Path]:
     engine._create_stage_tables()
+    signals = storage.sql_literal(signal_dates_path.as_posix())
     source = storage.sql_literal(candidate_glob)
     returns_source = storage.sql_literal(returns_glob)
     factor_column = storage.sql_literal(engine.factor_columns[0])
@@ -457,7 +469,10 @@ def _run_metric_job(
             )
             engine._insert_ic(block[0], block[-1])
             engine._create_position_tables()
-            engine._insert_returns(block[0], block[-1])
+            engine._insert_returns(
+                block[0], block[-1], signal_dates=f"SELECT * FROM read_parquet({signals})",
+                quotes_available=False,
+            )
             storage.execute("COMMIT")
         except Exception as exc:
             try:
@@ -674,6 +689,7 @@ def _waiting_worker_entry(
                 candidate_glob=candidate_glob,
                 returns_glob=returns_glob,
                 shard_directory=shard_directory,
+                signal_dates_path=workspace / "signal_dates.parquet",
             )
             result_queue.put(
                 {

@@ -12,7 +12,7 @@ from pathlib import Path
 from typing import Any, Iterable, Mapping, Sequence
 
 import duckdb
-from .check import EVALUATION_FILES, evaluation_files, evaluation_files_match
+from .check import MISSING_SIGNAL_POLICIES, EVALUATION_FILES, evaluation_files, evaluation_files_match
 from factor_protocol.artifacts import (
     read_config,
     replace_column_directory,
@@ -89,6 +89,7 @@ class EvaluationSettings:
 
     begin: str = DEFAULT_EVALUATION_BEGIN
     direction: str = "auto"
+    missing_signal: str = "hold"
     train_end: str = DEFAULT_TRAIN_END
     validation_end: str = DEFAULT_VALIDATION_END
     horizon_days: int = 5
@@ -132,6 +133,7 @@ class EvaluationSettings:
 
         settings = cls(
             direction=value("FACTOR_EVALUATE_DIRECTION", "auto").lower(),
+            missing_signal=value("FACTOR_EVALUATE_MISSING_SIGNAL", "hold").lower(),
             begin=value("FACTOR_EVALUATE_BEGIN", DEFAULT_EVALUATION_BEGIN),
             train_end=value("FACTOR_EVALUATE_TRAIN_END", DEFAULT_TRAIN_END),
             validation_end=value(
@@ -193,6 +195,8 @@ class EvaluationSettings:
     def validate(self) -> None:
         if self.direction not in {"positive", "negative", "auto"}:
             raise ValueError("direction must be positive, negative or auto")
+        if self.missing_signal not in MISSING_SIGNAL_POLICIES:
+            raise ValueError("missing_signal must be hold or liquidate")
         positive = {
             "horizon_days": self.horizon_days,
             "quantiles": self.quantiles,
@@ -376,6 +380,7 @@ class EvaluationConfig:
     factor_module: str | None = None
     begin: str | None = DEFAULT_EVALUATION_BEGIN
     direction: str = "auto"
+    missing_signal: str = "hold"
     train_end: str = DEFAULT_TRAIN_END
     validation_end: str = DEFAULT_VALIDATION_END
     end: str | None = None
@@ -406,6 +411,8 @@ class EvaluationConfig:
     def validate(self) -> None:
         if self.direction not in {"positive", "negative", "auto"}:
             raise ValueError("direction must be positive, negative or auto")
+        if self.missing_signal not in MISSING_SIGNAL_POLICIES:
+            raise ValueError("missing_signal must be hold or liquidate")
         if not self.tasks or set(self.tasks) - {"ic", "portfolio", "correlation"}:
             raise ValueError("tasks must select ic, portfolio or correlation")
         if self.daily_update and (self.rebuild or set(self.tasks) != {"ic", "portfolio", "correlation"}):

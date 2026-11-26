@@ -51,7 +51,7 @@ class _EvaluationComputeMixin(_IcMixin, _PortfolioMixin, _CorrelationMixin):
                     CAST(variant AS VARCHAR),
                     CAST(portfolio_id AS INTEGER),
                     CAST(layer AS INTEGER),
-                    MAX(CAST(date AS DATE)),
+                    MAX(CAST(date AS DATE)) FILTER (WHERE CAST(observations AS BIGINT) > 0),
                     arg_max(CAST(gross_return_nav AS DOUBLE), CAST(date AS DATE)),
                     arg_max(CAST(net_return_5bps_nav AS DOUBLE), CAST(date AS DATE))
                 FROM read_csv_auto({literal}, HEADER=TRUE)
@@ -756,6 +756,9 @@ class _EvaluationComputeMixin(_IcMixin, _PortfolioMixin, _CorrelationMixin):
             self._insert_ic(block_begin, block_end)
         if "portfolio" in self.tasks and self._block_has_metric("returns", columns, block_end):
             self._create_position_tables()
-            self._insert_returns(block_begin, block_end)
+            self._insert_returns(
+                block_begin, block_end,
+                signal_dates="SELECT DISTINCT factor_column, date FROM _factor_long WHERE variant = 'raw'",
+            )
         if "correlation" in self.tasks and self._block_has_metric("correlation", columns, block_end):
             self._insert_correlations(block_begin, block_end)
