@@ -51,6 +51,7 @@ class _EvaluationComputeMixin(_IcMixin, _PortfolioMixin, _CorrelationMixin):
                     CAST(variant AS VARCHAR),
                     CAST(portfolio_id AS INTEGER),
                     CAST(layer AS INTEGER),
+                    MAX(CAST(date AS DATE)),
                     arg_max(CAST(gross_return_nav AS DOUBLE), CAST(date AS DATE)),
                     arg_max(CAST(net_return_5bps_nav AS DOUBLE), CAST(date AS DATE))
                 FROM read_csv_auto({literal}, HEADER=TRUE)
@@ -202,38 +203,6 @@ class _EvaluationComputeMixin(_IcMixin, _PortfolioMixin, _CorrelationMixin):
               AND entry.price > 0.0
               AND isfinite(exit.price)
               AND exit.price > 0.0
-              AND (
-                    (
-                        signal.date <= CAST(
-                            {self.storage.sql_literal(self.cfg.train_end)} AS DATE
-                        )
-                        AND signal.exit_date <= CAST(
-                            {self.storage.sql_literal(self.cfg.train_end)} AS DATE
-                        )
-                    )
-                    OR (
-                        signal.date > CAST(
-                            {self.storage.sql_literal(self.cfg.train_end)} AS DATE
-                        )
-                        AND signal.date <= CAST(
-                            {self.storage.sql_literal(self.cfg.validation_end)} AS DATE
-                        )
-                        AND signal.exit_date <= CAST(
-                            {self.storage.sql_literal(self.cfg.validation_end)} AS DATE
-                        )
-                    )
-                    OR (
-                        signal.date > CAST(
-                            {self.storage.sql_literal(self.cfg.validation_end)} AS DATE
-                        )
-                        AND signal.date <= CAST(
-                            {self.storage.sql_literal(self.signal_end)} AS DATE
-                        )
-                        AND signal.exit_date <= CAST(
-                            {self.storage.sql_literal(self.exit_end)} AS DATE
-                        )
-                    )
-              )
             """
         )
 
@@ -350,14 +319,14 @@ class _EvaluationComputeMixin(_IcMixin, _PortfolioMixin, _CorrelationMixin):
         self,
         dates: tuple[str, ...],
         columns: Sequence[str],
+        context_begin: str,
     ) -> None:
         if not dates or not columns:
             return
-        context_begin = self._context_begin(dates[0])
         try:
             self._create_forward_block(context_begin, dates[-1])
             if "correlation" in self.tasks and self._block_has_metric("correlation", columns, dates[-1]):
-                self._create_reference_block(context_begin, dates[-1])
+                self._create_reference_block(dates[0], dates[-1])
             self._process_column_batch_with_retry(
                 tuple(columns),
                 dates=dates,
@@ -371,8 +340,8 @@ class _EvaluationComputeMixin(_IcMixin, _PortfolioMixin, _CorrelationMixin):
             # halves so an OOM can never create duplicates or partial dates.
             self._delete_block_results(dates, columns)
             midpoint = len(dates) // 2
-            self._process_date_block(dates[:midpoint], columns)
-            self._process_date_block(dates[midpoint:], columns)
+            self._process_date_block(dates[:midpoint], columns, context_begin)
+            self._process_date_block(dates[midpoint:], columns, context_begin)
 
     def _process_factor_date_block(
         self,
@@ -388,19 +357,21 @@ class _EvaluationComputeMixin(_IcMixin, _PortfolioMixin, _CorrelationMixin):
             self._factor_variants_relation,
         )
         try:
-            self._prepare_shared_forward_returns(dates[0], dates[-1])
+            context_begin = self._turnover_context_begin(dates[0], columns)
+            self._prepare_shared_forward_returns(context_begin, dates[-1])
             if "correlation" in self.tasks and self._block_has_metric("correlation", columns, dates[-1]):
-                self._prepare_reference_sources(self._context_begin(dates[0]), dates[-1])
-            self._create_factor_batch(columns, dates[0], dates[-1])
+                self._prepare_reference_sources(dates[0], dates[-1])
+            self._create_factor_batch(columns, context_begin, dates[-1])
             self._prepare_factor_variants(
                 columns,
-                process_begin=dates[0],
+                process_begin=context_begin,
                 process_end=dates[-1],
             )
-            self._process_date_block(dates, columns)
+            self._process_date_block(dates, columns, context_begin)
         except Exception as exc:
             if not _is_oom(exc) or len(dates) <= 1:
                 raise
+            self._delete_block_results(dates, columns)
             midpoint = len(dates) // 2
             self._process_factor_date_block(dates[:midpoint], columns)
             self._process_factor_date_block(dates[midpoint:], columns)
@@ -588,10 +559,11 @@ class _EvaluationComputeMixin(_IcMixin, _PortfolioMixin, _CorrelationMixin):
                     neutralized.*,
                     AVG(neutralized_value) OVER (
                         PARTITION BY factor_column, code
-                        ORDER BY date
-                        ROWS BETWEEN {rolling_preceding} PRECEDING AND CURRENT ROW
+                        ORDER BY calendar.calendar_seq
+                        RANGE BETWEEN {rolling_preceding} PRECEDING AND CURRENT ROW
                     ) AS rolling_value
                 FROM neutralized_values neutralized
+                JOIN _evaluation_calendar calendar USING (date)
             ),
             variants AS (
                 SELECT
@@ -630,20 +602,19 @@ class _EvaluationComputeMixin(_IcMixin, _PortfolioMixin, _CorrelationMixin):
         self,
         columns: Sequence[str],
         *,
-        block_begin: str,
+        context_begin: str,
         block_end: str,
     ) -> None:
         """Expose a bounded view of the precomputed factor variants."""
 
         factor_columns = _sql_list(self.storage, tuple(columns))
-        factor_context_begin = self._factor_context_begin(block_begin)
         self.storage.execute(
             f"""
             CREATE TEMP VIEW _factor_long AS
             SELECT date, code, factor_column, variant, factor_value
             FROM {self._factor_variants_relation}
             WHERE factor_column IN ({factor_columns})
-              AND date BETWEEN CAST({self.storage.sql_literal(factor_context_begin)} AS DATE)
+              AND date BETWEEN CAST({self.storage.sql_literal(context_begin)} AS DATE)
                            AND CAST({self.storage.sql_literal(block_end)} AS DATE)
             """
         )
@@ -703,6 +674,7 @@ class _EvaluationComputeMixin(_IcMixin, _PortfolioMixin, _CorrelationMixin):
                 variant,
                 factor_value,
                 portfolio_id,
+                exit_date,
                 gross_security_return,
                 CAST(
                     (factor_rank_base + factor_rank_end) / 2.0
@@ -759,7 +731,7 @@ class _EvaluationComputeMixin(_IcMixin, _PortfolioMixin, _CorrelationMixin):
         )
         self._create_factor_variants(
             columns,
-            block_begin=block_begin,
+            context_begin=context_begin,
             block_end=block_end,
         )
         self.storage.execute(
@@ -772,6 +744,7 @@ class _EvaluationComputeMixin(_IcMixin, _PortfolioMixin, _CorrelationMixin):
                 factor.variant,
                 factor.factor_value,
                 returns.portfolio_id,
+                returns.exit_date,
                 returns.gross_security_return
             FROM _factor_long factor
             JOIN _forward_returns_block returns USING (date, code)

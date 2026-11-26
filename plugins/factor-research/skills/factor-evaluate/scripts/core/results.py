@@ -190,7 +190,7 @@ class _EvaluationResultsMixin:
         factor_literal = self.storage.sql_literal(state.factor_column)
         if metric == "ic":
             new_query = f"""
-                SELECT date, variant, ic, observations
+                SELECT date, variant, ic, observations, exit_date
                 FROM _evaluation_ic
                 WHERE factor_column = {factor_literal}
             """

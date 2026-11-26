@@ -192,6 +192,7 @@ def _prepare_candidate_panel(
                 variants.variant AS variant,
                 variants.factor_value,
                 returns.portfolio_id,
+                returns.exit_date,
                 returns.gross_security_return
             FROM {engine._factor_variants_relation} variants
             JOIN {engine._forward_returns_relation} returns USING (date, code)
@@ -244,6 +245,7 @@ def _prepare_candidate_panel(
                     date,
                     code,
                     portfolio_id,
+                    exit_date,
                     gross_security_return
                 FROM {engine._forward_returns_relation}
                 WHERE isfinite(gross_security_return)
@@ -415,7 +417,7 @@ def _run_metric_job(
     )
 
     def process_block(block: tuple[str, ...]) -> None:
-        context_begin = engine._context_begin(block[0])
+        context_begin = engine._turnover_context_begin(block[0], engine.factor_columns)
         try:
             storage.execute("BEGIN TRANSACTION")
             engine._drop_temp_relations(
@@ -432,6 +434,7 @@ def _run_metric_job(
                     CAST(candidate.variant AS evaluation_variant) AS variant,
                     candidate.factor_value,
                     returns.portfolio_id,
+                    returns.exit_date,
                     returns.gross_security_return,
                     candidate.factor_rank,
                     candidate.return_rank,
@@ -441,7 +444,7 @@ def _run_metric_job(
                     candidate.top_low_selected
                 FROM read_parquet({source}) candidate
                 JOIN (
-                    SELECT date, code, portfolio_id, gross_security_return
+                    SELECT date, code, portfolio_id, exit_date, gross_security_return
                     FROM read_parquet({returns_source})
                     WHERE date
                           BETWEEN CAST({storage.sql_literal(context_begin)} AS DATE)

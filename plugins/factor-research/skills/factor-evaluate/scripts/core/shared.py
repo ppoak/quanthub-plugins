@@ -254,7 +254,7 @@ def _read_dotenv(path: Path) -> dict[str, str]:
     return values
 
 
-IC_COLUMNS = ("date", "variant", "ic", "observations")
+IC_COLUMNS = ("date", "variant", "ic", "observations", "exit_date")
 CORRELATION_COLUMNS = (
     "date",
     "variant",
@@ -304,6 +304,7 @@ _STAGE_TABLE_DEFINITIONS = {
         "variant VARCHAR",
         "ic DOUBLE",
         "observations BIGINT",
+        "exit_date DATE",
     ),
     "_evaluation_returns": (
         "factor_column VARCHAR",
@@ -340,6 +341,7 @@ _STAGE_TABLE_DEFINITIONS = {
         "variant VARCHAR",
         "portfolio_id INTEGER",
         "layer INTEGER",
+        "last_date DATE",
         "gross_seed DOUBLE",
         "net_seed DOUBLE",
     ),

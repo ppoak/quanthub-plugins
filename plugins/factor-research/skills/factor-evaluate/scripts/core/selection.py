@@ -48,7 +48,7 @@ def selection_query(
                   AND ic.date >= CAST(
                       {literal(begin)} AS DATE
                   )
-                  AND ic.date <= CAST(
+                  AND ic.exit_date <= CAST(
                       {literal(train_end)} AS DATE
                   )
                 GROUP BY ic.factor_column
@@ -65,7 +65,7 @@ def selection_query(
                 WHERE ic.date > CAST(
                       {literal(train_end)} AS DATE
                   )
-                  AND ic.date <= CAST(
+                  AND ic.exit_date <= CAST(
                       {literal(validation_end)} AS DATE
                   )
                 GROUP BY ic.factor_column, ic.variant
@@ -163,10 +163,15 @@ def read_selection_rows(
     begin: str,
 ) -> list[tuple[Any, ...]]:
     literal = FactorStorage.sql_literal
+    relation = f"read_csv_auto({literal(path.as_posix())}, header=TRUE)"
+    # Legacy IC rows already excluded returns that settled after a split.
+    columns = {row[0] for row in connection.execute(f"DESCRIBE SELECT * FROM {relation}").fetchall()}
+    exit_date = "exit_date" if "exit_date" in columns else "date"
     source = f"""
         SELECT {literal(column)} AS factor_column, CAST(date AS DATE) AS date,
-               CAST(variant AS VARCHAR) AS variant, TRY_CAST(ic AS DOUBLE) AS ic
-        FROM read_csv_auto({literal(path.as_posix())}, header=TRUE)
+               CAST(variant AS VARCHAR) AS variant, TRY_CAST(ic AS DOUBLE) AS ic,
+               CAST({exit_date} AS DATE) AS exit_date
+        FROM {relation}
         WHERE TRY_CAST(ic AS DOUBLE) IS NOT NULL AND isfinite(TRY_CAST(ic AS DOUBLE))
     """
     query = selection_query(

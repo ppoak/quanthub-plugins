@@ -159,6 +159,7 @@ class _PortfolioMixin:
                  AND previous.portfolio_id = current.portfolio_id
                  AND previous.portfolio_kind = current.portfolio_kind
                  AND previous.layer IS NOT DISTINCT FROM current.layer
+                 AND previous.portfolio_kind = current.portfolio_kind
                  AND previous.code = current.code
                 GROUP BY current.factor_column, current.date, current.variant,
                          current.portfolio_id, current.layer, current.portfolio_kind

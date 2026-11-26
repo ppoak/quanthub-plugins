@@ -1,14 +1,21 @@
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Sequence
 
-from .check import EVALUATION_FILES, check_evaluation_config, evaluation_config
+from .check import (
+    EVALUATION_FILES,
+    PORTFOLIO_ACCOUNTING,
+    check_evaluation_config,
+    evaluation_config,
+)
 
 from .shared import (
     EVALUATION_VARIANTS,
     Any,
     _ColumnState,
     _parse_memory_bytes,
+    _sql_list,
     read_config,
     resolve_output_root,
 )
@@ -59,6 +66,7 @@ class _EvaluationStateMixin:
     def _semantic_parameters(self) -> dict[str, Any]:
         return {
             "begin": self.begin,
+            "portfolio_accounting": PORTFOLIO_ACCOUNTING,
             "horizon_days": self.cfg.horizon_days,
             "execution_lag_days": self.cfg.execution_lag_days,
             "price_col": self.cfg.price_col,
@@ -111,6 +119,8 @@ class _EvaluationStateMixin:
             destination, factor_name=self.cfg.factor_name, factor_source=self.cfg.storage_factor_name,
             factor_data=self.cfg.factor_data, project_root=self.project_root,
         )
+        if config["parameters"].get("portfolio_accounting") != PORTFOLIO_ACCOUNTING:
+            raise ValueError(f"portfolio accounting changed: {destination}; rebuild evaluation")
         if config["parameters"] != self._semantic_parameters():
             raise ValueError(f"evaluation parameters changed: {destination}; rebuild evaluation")
         if len(self._stored_selection_rows(state)) != len(EVALUATION_VARIANTS):
@@ -174,27 +184,38 @@ class _EvaluationStateMixin:
             ],
         )
 
-    def _context_begin(self, signal_date: str) -> str:
-        """Return the earliest signal date needed for a turnover context."""
+    def _turnover_context_begin(self, signal_date: str, columns: Sequence[str]) -> str:
+        """Find the last realized positions for each staggered portfolio and layer."""
 
-        signal_index = self._calendar_index[signal_date]
-        context_index = max(
-            self._anchor_signal_index,
-            # Period-end exit filtering removes horizon + lag signal dates.
-            # Include the preceding cycle for every staggered portfolio.
-            signal_index
-            - (3 * self.cfg.horizon_days + self.cfg.execution_lag_days - 1),
-        )
-        return self.quote_dates[context_index]
+        if "portfolio" not in self.tasks:
+            return signal_date
+        columns_sql = _sql_list(self.storage, columns)
+        first_signal = self.storage.sql_literal(signal_date)
+        row = self.storage.execute(
+            f"""
+            SELECT MIN(last_date) FROM (
+                SELECT MAX(date) AS last_date
+                FROM (
+                    SELECT factor_column, variant, portfolio_id, layer, date
+                    FROM _evaluation_returns
+                    UNION ALL
+                    SELECT factor_column, variant, portfolio_id, layer, last_date
+                    FROM _layer_nav_seed
+                ) history
+                WHERE factor_column IN ({columns_sql})
+                  AND date < CAST({first_signal} AS DATE)
+                GROUP BY factor_column, variant, portfolio_id, layer
+            ) latest
+            """
+        ).fetchone()
+        return row[0].isoformat() if row[0] is not None else signal_date
 
     def _factor_context_begin(self, signal_date: str) -> str:
-        """Return context needed by turnover and rolling neutralized values."""
+        """Include the complete rolling trading-day window for the first signal."""
 
-        turnover_index = self._calendar_index[self._context_begin(signal_date)]
-        # The previous portfolio needs its own complete rolling window.
         context_index = max(
             self._anchor_signal_index,
-            turnover_index - self.cfg.rolling_mean_days + 1,
+            self._calendar_index[signal_date] - self.cfg.rolling_mean_days + 1,
         )
         return self.quote_dates[context_index]
 

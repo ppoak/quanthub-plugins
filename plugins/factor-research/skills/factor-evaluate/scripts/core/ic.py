@@ -20,7 +20,8 @@ class _IcMixin:
                     ranked.date,
                     ranked.variant,
                     corr(ranked.factor_rank, ranked.return_rank) AS ic,
-                    COUNT(*) AS observations
+                    COUNT(*) AS observations,
+                    MAX(ranked.exit_date) AS exit_date
                 FROM _ranked_positions ranked
                 {cutoff_join}
                 WHERE ranked.date
@@ -29,7 +30,7 @@ class _IcMixin:
                   {cutoff_filter}
                 GROUP BY ranked.factor_column, ranked.date, ranked.variant
             )
-            SELECT factor_column, date, variant, ic, observations
+            SELECT factor_column, date, variant, ic, observations, exit_date
             FROM metrics
             WHERE observations >= 3
               AND isfinite(ic)

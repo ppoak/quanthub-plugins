@@ -14,6 +14,7 @@ EVALUATION_FILES = {
     "returns": "returns.csv",
     "correlation": "correlation.csv",
 }
+PORTFOLIO_ACCOUNTING = "continuous"
 PARAMETERS = {
     "begin", "train_end", "validation_end", "horizon_days", "execution_lag_days",
     "price_col", "quantiles", "top_percentile", "rolling_mean_days", "industry_level",
@@ -96,8 +97,10 @@ def check_evaluation_config(
     if not config.get("files"):
         raise ValueError(f"complete evaluation is required: {column_dir}")
     parameters = config.get("parameters")
-    if not isinstance(parameters, Mapping) or set(parameters) != PARAMETERS:
+    if not isinstance(parameters, Mapping) or set(parameters) - {"portfolio_accounting"} != PARAMETERS:
         raise ValueError(f"evaluation parameters are missing: {column_dir}")
+    if parameters.get("portfolio_accounting", PORTFOLIO_ACCOUNTING) != PORTFOLIO_ACCOUNTING:
+        raise ValueError(f"unknown portfolio accounting: {column_dir}")
     if parameters["direction"] not in {"positive", "negative", "auto"}:
         raise ValueError(f"invalid evaluation direction: {column_dir}")
     try:
