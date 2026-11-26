@@ -65,6 +65,7 @@ uv run --locked python "<path-to-skill>/scripts/run_evaluate.py" --factor-data a
 ## 注意事项
 
 - 日期须满足 `begin <= train_end < validation_end < end`。收益未能在对应区间内实现的记录不参与统计，不填零。
+- 独立评估的信号日受因子数据覆盖范围限制。显式指定 `--end` 时，退出日可以使用该日期前已入库的行情，包括因子最后一日之后的行情。
 - 直接评分的结果保存到 `<output-dir>/<column>/`，默认目录为 `$ARTIFACTS/factor_evaluation`。因子包默认保存到 `$ARTIFACTS/factor_zoo/<name>/<column>/`。完整评估一起提交三份 CSV 和配置。单项任务可补齐同一数据和参数下的结果，不能覆盖因子包默认目录里的完整结果。文件说明见[评估产物](references/evaluation-artifacts.md)。
 - `--refresh` 仅用于单个因子包，沿用已有设置刷新全部声明列，不能与 `--task`、`--factor-column` 或 `--rebuild` 混用。日更时，三项指标各自从 CSV 最后一个实际结果日续算。需要按当前参数重建时，用独立的 `--rebuild`。
 - 直接评分不能使用 `readme` 或 `--refresh`。是否采用或发布因子由用户判断。

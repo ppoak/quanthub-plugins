@@ -84,21 +84,22 @@ class _EvaluationEngine(
         if self.factor_range is None:
             raise ValueError(f"factor data is unavailable: {self.factor_source}")
         self.begin = cfg.begin or self.factor_range[0]
-        target = min(cfg.end or self.factor_range[1], self.factor_range[1])
-        if self.begin > target:
+        requested_end = cfg.end or self.factor_range[1]
+        signal_target = min(requested_end, self.factor_range[1])
+        if self.begin > signal_target:
             raise ValueError("evaluation begin must not be later than end")
         self.quote_dates = _partition_dates(self.data_root / "quotes_day")
         self.signal_dates = [
             value
             for value in self.quote_dates
-            if self.begin <= value <= target
+            if self.begin <= value <= signal_target
         ]
         if not self.signal_dates:
             raise ValueError("evaluation range contains no trading dates")
-        self.end = self.signal_dates[-1]
-        if cfg.daily_update and self.end != self.factor_range[1]:
+        self.signal_end = self.signal_dates[-1]
+        if cfg.daily_update and self.signal_end != self.factor_range[1]:
             raise ValueError("daily evaluation requires the latest committed factor date")
-        if not self.begin <= self.cfg.train_end < self.cfg.validation_end < self.end:
+        if not self.begin <= self.cfg.train_end < self.cfg.validation_end < self.signal_end:
             raise ValueError(
                 "evaluation dates must satisfy "
                 "begin <= train_end < validation_end < last trading date"
@@ -107,8 +108,15 @@ class _EvaluationEngine(
             value: index for index, value in enumerate(self.quote_dates)
         }
         self._anchor_signal_index = self._calendar_index[self.signal_dates[0]]
-        last_mature_index = self._calendar_index[self.end] - cfg.horizon_days - cfg.execution_lag_days
-        self.mature_end = self.quote_dates[last_mature_index] if last_mature_index >= 0 else ""
+        self.exit_end = (
+            self.signal_end if cfg.daily_update
+            else max(value for value in self.quote_dates if value <= requested_end)
+        )
+        last_mature_index = self._calendar_index[self.exit_end] - cfg.horizon_days - cfg.execution_lag_days
+        self.mature_end = (
+            min(self.signal_end, self.quote_dates[last_mature_index])
+            if last_mature_index >= 0 else ""
+        )
         self._states: tuple[_ColumnState, ...] = ()
         self.column_batch_size = self.settings.default_column_batch_size
         self.date_batch_days = self.settings.default_date_batch_days

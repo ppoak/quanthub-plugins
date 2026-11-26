@@ -227,10 +227,10 @@ class _EvaluationComputeMixin(_IcMixin, _PortfolioMixin, _CorrelationMixin):
                             {self.storage.sql_literal(self.cfg.validation_end)} AS DATE
                         )
                         AND signal.date <= CAST(
-                            {self.storage.sql_literal(self.end)} AS DATE
+                            {self.storage.sql_literal(self.signal_end)} AS DATE
                         )
                         AND signal.exit_date <= CAST(
-                            {self.storage.sql_literal(self.end)} AS DATE
+                            {self.storage.sql_literal(self.exit_end)} AS DATE
                         )
                     )
               )

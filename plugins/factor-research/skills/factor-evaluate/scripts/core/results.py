@@ -267,6 +267,8 @@ class _EvaluationResultsMixin:
             }
             parameters = self._semantic_parameters()
             previous_files = state.config.get("files", {})
+            previous_signal_end = state.config.get("partial_end")
+            previous_exit_end = state.config.get("partial_exit_end", previous_signal_end)
             compatible = (state.config.get("factor") == factor
                           and state.config.get("parameters") == parameters
                           and state.config.get("input") == self.input)
@@ -285,8 +287,8 @@ class _EvaluationResultsMixin:
                     else:
                         self._copy_query_to_csv(self._metric_query(state, metric), staging / filename)
                 elif compatible and filename in previous_files and (
-                    state.config.get("partial_end") == self.end
-                    or ("partial_end" not in state.config
+                    (previous_signal_end == self.signal_end and previous_exit_end == self.exit_end)
+                    or (previous_signal_end is None
                         and (self._last_date(previous) == self.mature_end
                              or (metric == "correlation" and not self.reference_factors)))
                 ):
@@ -301,7 +303,9 @@ class _EvaluationResultsMixin:
                 "files": files,
                 "completed_at": datetime.now(timezone.utc).isoformat(),
                 **({"input": self.input} if self.input is not None else {}),
-                **({"partial_end": self.end} if len(files) != len(EVALUATION_FILES) else {}),
+                **({"partial_end": self.signal_end} if len(files) != len(EVALUATION_FILES) else {}),
+                **({"partial_exit_end": self.exit_end}
+                   if len(files) != len(EVALUATION_FILES) and self.exit_end != self.signal_end else {}),
             })
             return staging
         except Exception:
