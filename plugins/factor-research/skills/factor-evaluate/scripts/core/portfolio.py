@@ -64,10 +64,37 @@ class _PortfolioMixin:
         )
 
 
-    def _create_portfolio_events(
+    def _create_portfolio_targets(self, block_end: str) -> None:
+        last = self.storage.sql_literal(block_end)
+        self.storage.execute(
+            f"""
+            CREATE TEMP TABLE _portfolio_targets AS
+            WITH targets AS (
+                SELECT factor_column, variant, portfolio_id, layer, portfolio_kind,
+                       date, calendar_seq, AVG(gross_security_return) AS gross_return,
+                       COUNT(*) AS holdings,
+                       SUM(target_weight * (1.0 + gross_security_return)) AS drift_total
+                FROM _portfolio_positions
+                JOIN _evaluation_calendar USING (date)
+                WHERE date <= CAST({last} AS DATE)
+                GROUP BY ALL
+            )
+            SELECT *, LAG(date) OVER schedule AS previous_date,
+                      LAG(calendar_seq) OVER schedule AS previous_seq,
+                      LAG(drift_total) OVER schedule AS previous_drift_total,
+                      LEAD(calendar_seq) OVER schedule AS next_seq
+            FROM targets
+            WINDOW schedule AS (
+                PARTITION BY factor_column, variant, portfolio_id, layer, portfolio_kind
+                ORDER BY calendar_seq
+            )
+            """
+        )
+
+    def _create_gap_events(
         self, block_begin: str, block_end: str, signal_dates: str,
     ) -> None:
-        """Track each staggered portfolio on its scheduled rebalance dates."""
+        """Expand only the missing rebalances and the first target after each gap."""
 
         first_seq = self._calendar_index[block_begin] + 1
         last_seq = self._calendar_index[block_end] + 1
@@ -84,63 +111,50 @@ class _PortfolioMixin:
         )
         self.storage.execute(
             f"""
-            CREATE TEMP TABLE _portfolio_events AS
-            WITH targets AS (
-                SELECT DISTINCT factor_column, variant, portfolio_id, layer,
-                                portfolio_kind, calendar_seq
-                FROM _portfolio_positions
-                JOIN _evaluation_calendar USING (date)
-            ),
-            starts AS (
+            CREATE TEMP TABLE _portfolio_gap_events AS
+            WITH intervals AS (
                 SELECT factor_column, variant, portfolio_id, layer, portfolio_kind,
-                       MIN(calendar_seq) AS first_seq
-                FROM targets
-                GROUP BY ALL
+                       date AS previous_date, calendar_seq AS target_seq,
+                       COALESCE(next_seq, {last_seq + 1}) AS gap_end
+                FROM _portfolio_targets
+                WHERE calendar_seq + {horizon} < COALESCE(next_seq, {last_seq + 1})
+                  AND (next_seq IS NULL OR next_seq >= {first_seq})
+            ),
+            dates AS (
+                SELECT intervals.*, schedule.seq AS calendar_seq, FALSE AS has_target
+                FROM intervals
+                CROSS JOIN LATERAL range(target_seq + {horizon}, gap_end, {horizon}) AS schedule(seq)
+                UNION ALL
+                SELECT intervals.*, gap_end, TRUE
+                FROM intervals
+                WHERE gap_end <= {last_seq}
             ),
             slots AS (
-                SELECT starts.factor_column, starts.variant, starts.portfolio_id,
-                       starts.layer, starts.portfolio_kind, calendar.date,
-                       calendar.calendar_seq, targets.calendar_seq IS NOT NULL AS has_target
-                FROM starts
-                CROSS JOIN LATERAL range(starts.first_seq, {last_seq + 1}, {horizon})
-                    AS schedule(seq)
-                JOIN _evaluation_calendar calendar ON calendar.calendar_seq = schedule.seq
-                LEFT JOIN targets USING (
-                    factor_column, variant, portfolio_id, layer, portfolio_kind, calendar_seq
-                )
+                SELECT dates.*, calendar.date
+                FROM dates JOIN _evaluation_calendar calendar USING (calendar_seq)
             ),
             actions AS (
                 SELECT slots.*, {liquidation} AS requests_liquidation
                 FROM slots
             ),
-            history AS (
-                SELECT actions.*,
-                       MAX(calendar_seq) FILTER (WHERE has_target) OVER before_trade AS target_seq,
-                       MAX(calendar_seq) FILTER (WHERE requests_liquidation) OVER before_trade
-                           AS liquidation_seq
+            exits AS (
+                SELECT *, MIN(calendar_seq) FILTER (WHERE requests_liquidation) OVER (
+                    PARTITION BY factor_column, variant, portfolio_id, layer, portfolio_kind, target_seq
+                ) AS liquidation_seq
                 FROM actions
-                WINDOW before_trade AS (
-                    PARTITION BY factor_column, variant, portfolio_id, layer, portfolio_kind
-                    ORDER BY calendar_seq ROWS BETWEEN UNBOUNDED PRECEDING AND 1 PRECEDING
-                )
             ),
             held AS (
-                SELECT history.*,
-                       target_seq IS NOT NULL
-                           AND (liquidation_seq IS NULL OR target_seq > liquidation_seq) AS invested
-                FROM history
+                SELECT *, liquidation_seq IS NULL OR calendar_seq <= liquidation_seq AS invested
+                FROM exits
             )
-            SELECT held.factor_column, held.variant, held.portfolio_id, held.layer,
-                   held.portfolio_kind, held.date, held.calendar_seq, held.has_target,
-                   held.requests_liquidation AS sell,
-                   held.invested, prior.date AS previous_date, held.target_seq,
-                   invested AND (held.calendar_seq > target_seq + {horizon}
+            SELECT factor_column, variant, portfolio_id, layer, portfolio_kind,
+                   date, calendar_seq, has_target, requests_liquidation AS sell,
+                   invested, previous_date, target_seq,
+                   invested AND (calendar_seq > target_seq + {horizon}
                        OR (NOT has_target AND NOT requests_liquidation)) AS needs_mark
             FROM held
-            LEFT JOIN _evaluation_calendar prior
-                ON held.invested AND prior.calendar_seq = held.target_seq
-            WHERE held.calendar_seq >= {first_seq}
-              AND (held.has_target OR held.invested)
+            WHERE calendar_seq >= {first_seq}
+              AND (has_target OR invested)
             """
         )
 
@@ -152,7 +166,7 @@ class _PortfolioMixin:
         earliest, latest = self.storage.execute(
             f"""
             SELECT MIN(target_seq + {lag + horizon}), MAX(calendar_seq + {lag + horizon})
-            FROM _portfolio_events
+            FROM _portfolio_gap_events
             WHERE needs_mark
             """
         ).fetchone()
@@ -187,7 +201,7 @@ class _PortfolioMixin:
                        anchor.date AS anchor_date, entry.date AS entry_date,
                        CASE WHEN NOT events.has_target AND NOT events.sell
                             THEN finish.date ELSE entry.date END AS finish_date
-                FROM _portfolio_events events
+                FROM _portfolio_gap_events events
                 JOIN _portfolio_positions previous
                   ON previous.factor_column = events.factor_column
                  AND previous.variant = events.variant
@@ -223,9 +237,13 @@ class _PortfolioMixin:
     def _insert_returns(
         self, block_begin: str, block_end: str, *, signal_dates: str, quotes_available: bool = True,
     ) -> None:
-        self._drop_temp_relations("_portfolio_events", "_portfolio_gap_marks")
-        self._create_portfolio_events(block_begin, block_end, signal_dates)
+        self._drop_temp_relations("_portfolio_targets", "_portfolio_gap_events", "_portfolio_gap_marks")
+        self._create_portfolio_targets(block_end)
+        self._create_gap_events(block_begin, block_end, signal_dates)
         self._create_gap_marks(quotes_available=quotes_available)
+        first = self.storage.sql_literal(block_begin)
+        last = self.storage.sql_literal(block_end)
+        horizon = self.cfg.horizon_days
         needs_cutoff = self._block_requires_cutoff(block_begin, "returns")
         cutoff_join = (
             "JOIN _evaluation_cutoffs cutoff USING (factor_column)"
@@ -233,14 +251,33 @@ class _PortfolioMixin:
             else ""
         )
         cutoff_filter = (
-            "AND layer_metrics.date >= cutoff.returns"
+            "WHERE layer_metrics.date >= cutoff.returns"
             if needs_cutoff
             else ""
         )
         self.storage.execute(
             f"""
             INSERT INTO _evaluation_returns
-            WITH previous_base AS (
+            WITH targets AS (
+                SELECT * FROM _portfolio_targets
+                WHERE date BETWEEN CAST({first} AS DATE) AND CAST({last} AS DATE)
+            ),
+            regular_previous AS (
+                SELECT target.factor_column, target.date, target.variant, target.portfolio_id,
+                       target.layer, target.portfolio_kind, previous.code,
+                       previous.target_weight * (1.0 + previous.gross_security_return)
+                           / NULLIF(target.previous_drift_total, 0.0) AS previous_weight
+                FROM targets target
+                JOIN _portfolio_positions previous
+                  ON previous.factor_column = target.factor_column
+                 AND previous.variant = target.variant
+                 AND previous.date = target.previous_date
+                 AND previous.portfolio_id = target.portfolio_id
+                 AND previous.portfolio_kind = target.portfolio_kind
+                 AND previous.layer = target.layer
+                WHERE target.calendar_seq = target.previous_seq + {horizon}
+            ),
+            gap_previous_base AS (
                 SELECT
                     dates.factor_column,
                     dates.date,
@@ -251,7 +288,7 @@ class _PortfolioMixin:
                     previous.code,
                     COALESCE(marks.start_value,
                         previous.target_weight * (1.0 + previous.gross_security_return)) AS drift_value
-                FROM _portfolio_events dates
+                FROM _portfolio_gap_events dates
                 JOIN _portfolio_positions previous
                  ON previous.factor_column = dates.factor_column
                  AND previous.variant = dates.variant
@@ -267,9 +304,9 @@ class _PortfolioMixin:
                  AND marks.portfolio_kind = dates.portfolio_kind
                  AND marks.date = dates.date
                  AND marks.code = previous.code
-                WHERE dates.has_target
+                WHERE dates.has_target AND dates.invested
             ),
-            previous_positions AS (
+            gap_previous_positions AS (
                 SELECT
                     factor_column,
                     date,
@@ -285,42 +322,31 @@ class _PortfolioMixin:
                         ),
                         0.0
                     ) AS previous_weight
-                FROM previous_base
+                FROM gap_previous_base
+            ),
+            -- Attach the rebalance date before matching securities; otherwise a
+            -- join ordered by security first can pair holdings across many dates.
+            previous_positions AS MATERIALIZED (
+                SELECT * FROM regular_previous
+                UNION ALL
+                SELECT * FROM gap_previous_positions
             ),
             overlap AS (
-                SELECT
-                    current.factor_column,
-                    current.date,
-                    current.variant,
-                    current.portfolio_id,
-                    current.layer,
-                    current.portfolio_kind,
-                    SUM(LEAST(current.target_weight, previous.previous_weight))
-                        AS common_weight
-                FROM _portfolio_positions current
-                JOIN previous_positions previous
-                  ON previous.factor_column = current.factor_column
-                 AND previous.variant = current.variant
-                 AND previous.date = current.date
-                 AND previous.portfolio_id = current.portfolio_id
-                 AND previous.portfolio_kind = current.portfolio_kind
-                 AND previous.layer = current.layer
-                 AND previous.code = current.code
-                GROUP BY current.factor_column, current.date, current.variant,
-                         current.portfolio_id, current.layer, current.portfolio_kind
+                SELECT factor_column, date, variant, portfolio_id, layer, portfolio_kind,
+                       SUM(LEAST(current.target_weight, previous.previous_weight)) AS common_weight
+                FROM previous_positions previous
+                JOIN _portfolio_positions current USING (
+                    factor_column, date, variant, portfolio_id, layer, portfolio_kind, code
+                )
+                GROUP BY ALL
             ),
-            turnover AS (
+            target_metrics AS (
                 SELECT
-                    dates.factor_column,
-                    dates.date,
-                    dates.variant,
-                    dates.portfolio_id,
-                    dates.layer,
-                    dates.portfolio_kind,
+                    target.factor_column, target.date, target.variant, target.portfolio_id,
+                    target.layer, target.portfolio_kind, target.gross_return, target.holdings,
+                    target.holdings AS observations,
                     CASE
-                        WHEN dates.sell THEN 1.0
-                        WHEN NOT dates.has_target THEN 0.0
-                        WHEN NOT dates.invested THEN 1.0
+                        WHEN target.previous_seq IS NULL OR gap.invested IS FALSE THEN 1.0
                         ELSE LEAST(
                             2.0,
                             GREATEST(
@@ -329,58 +355,31 @@ class _PortfolioMixin:
                             )
                         )
                     END AS turnover
-                FROM _portfolio_events dates
+                FROM targets target
                 LEFT JOIN overlap USING (
                     factor_column, date, variant, portfolio_id, layer,
                     portfolio_kind
                 )
+                LEFT JOIN (SELECT * FROM _portfolio_gap_events WHERE has_target) gap USING (
+                    factor_column, date, variant, portfolio_id, layer, portfolio_kind
+                )
             ),
-            returns AS (
-                SELECT
-                    factor_column,
-                    date,
-                    variant,
-                    portfolio_id,
-                    layer,
-                    portfolio_kind,
-                    AVG(gross_security_return) AS gross_return,
-                    COUNT(*) AS holdings,
-                    COUNT(*) AS observations
-                FROM _portfolio_positions
-                GROUP BY factor_column, date, variant, portfolio_id, layer,
-                         portfolio_kind
+            metrics AS (
+                SELECT * FROM target_metrics
                 UNION ALL
                 SELECT factor_column, date, variant, portfolio_id, layer, portfolio_kind,
-                       SUM(end_value) / SUM(start_value) - 1.0, COUNT(*), 0
+                       SUM(end_value) / SUM(start_value) - 1.0, COUNT(*), 0, 0.0
                 FROM _portfolio_gap_marks
-                JOIN _portfolio_events USING (
+                JOIN _portfolio_gap_events USING (
                     factor_column, date, variant, portfolio_id, layer, portfolio_kind
                 )
                 WHERE NOT has_target AND NOT sell
                 GROUP BY factor_column, date, variant, portfolio_id, layer, portfolio_kind
                 UNION ALL
                 SELECT factor_column, date, variant, portfolio_id, layer, portfolio_kind,
-                       0.0, 0, 0
-                FROM _portfolio_events
+                       0.0, 0, 0, 1.0
+                FROM _portfolio_gap_events
                 WHERE sell
-            ),
-            metrics AS (
-                SELECT
-                    returns.factor_column,
-                    returns.date,
-                    returns.variant,
-                    returns.portfolio_id,
-                    returns.layer,
-                    returns.portfolio_kind,
-                    returns.gross_return,
-                    returns.holdings,
-                    returns.observations,
-                    turnover.turnover
-                FROM returns
-                JOIN turnover USING (
-                    factor_column, date, variant, portfolio_id, layer,
-                    portfolio_kind
-                )
             ),
             layer_metrics AS (
                 SELECT *
@@ -425,9 +424,6 @@ class _PortfolioMixin:
             JOIN top_high_metrics USING (factor_column, date, variant, portfolio_id)
             JOIN top_low_metrics USING (factor_column, date, variant, portfolio_id)
             {cutoff_join}
-            WHERE layer_metrics.date
-                  BETWEEN CAST({self.storage.sql_literal(block_begin)} AS DATE)
-                      AND CAST({self.storage.sql_literal(block_end)} AS DATE)
-              {cutoff_filter}
+            {cutoff_filter}
             """
         )
