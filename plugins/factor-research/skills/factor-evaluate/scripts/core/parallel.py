@@ -102,18 +102,17 @@ def _new_engine(
     )
 
 
-def _prepare_engine(engine: _EvaluationEngine) -> tuple[dict[str, Any], list[str]]:
+def _prepare_engine(engine: _EvaluationEngine) -> list[str]:
     engine._validate_quote_schema()
     engine._validate_industry_schema()
-    manifest = engine._manifest(engine.factor_source, engine.end)
-    engine._states = engine._column_states(manifest)
+    engine._states = engine._column_states()
     engine._create_calendar()
     process_begin = max(
         min(state.cutoff for state in engine._states),
         engine.factor_range[0],
     )
-    process_dates = [date for date in engine.signal_dates if date >= process_begin]
-    return manifest, process_dates
+    process_dates = [date for date in engine.signal_dates if process_begin <= date <= engine.mature_end]
+    return process_dates
 
 
 def _prepare_worker_engine(
@@ -129,7 +128,7 @@ def _prepare_worker_engine(
             factor_column=engine.factor_columns[0],
             output_dir=workspace,
             config={},
-            cutoff=cutoff,
+            cutoffs={metric: cutoff for metric in ("ic", "returns", "correlation")},
             incremental=False,
         ),
     )
@@ -163,7 +162,7 @@ def _prepare_candidate_panel(
             factor_columns=factor_columns,
             reference_factors=(),
         )
-        _manifest, process_dates = _prepare_engine(engine)
+        process_dates = _prepare_engine(engine)
         if not process_dates:
             raise ValueError(
                 "parallel evaluation range contains no materialized factor dates"
@@ -182,6 +181,16 @@ def _prepare_candidate_panel(
             process_end=process_dates[-1],
             materialize=False,
         )
+        if cfg.missing_signal == "liquidate":
+            signal_dates = storage.sql_literal((workspace / "signal_dates.parquet").as_posix())
+            storage.execute(
+                f"""
+                COPY (
+                    SELECT DISTINCT factor_column, date FROM {engine._factor_variants_relation}
+                    WHERE variant = 'raw'
+                ) TO {signal_dates} (FORMAT PARQUET)
+                """
+            )
         factor_column = storage.sql_literal(factor_columns[0])
         storage.execute(
             f"""
@@ -193,6 +202,7 @@ def _prepare_candidate_panel(
                 variants.variant AS variant,
                 variants.factor_value,
                 returns.portfolio_id,
+                returns.exit_date,
                 returns.gross_security_return
             FROM {engine._factor_variants_relation} variants
             JOIN {engine._forward_returns_relation} returns USING (date, code)
@@ -245,6 +255,7 @@ def _prepare_candidate_panel(
                     date,
                     code,
                     portfolio_id,
+                    exit_date,
                     gross_security_return
                 FROM {engine._forward_returns_relation}
                 WHERE isfinite(gross_security_return)
@@ -406,8 +417,10 @@ def _run_metric_job(
     candidate_glob: str,
     returns_glob: str,
     shard_directory: Path,
+    signal_dates_path: Path,
 ) -> tuple[Path, Path]:
     engine._create_stage_tables()
+    signals = storage.sql_literal(signal_dates_path.as_posix())
     source = storage.sql_literal(candidate_glob)
     returns_source = storage.sql_literal(returns_glob)
     factor_column = storage.sql_literal(engine.factor_columns[0])
@@ -416,7 +429,7 @@ def _run_metric_job(
     )
 
     def process_block(block: tuple[str, ...]) -> None:
-        context_begin = engine._context_begin(block[0])
+        context_begin = engine._turnover_context_begin(block[0], engine.factor_columns)
         try:
             storage.execute("BEGIN TRANSACTION")
             engine._drop_temp_relations(
@@ -433,6 +446,7 @@ def _run_metric_job(
                     CAST(candidate.variant AS evaluation_variant) AS variant,
                     candidate.factor_value,
                     returns.portfolio_id,
+                    returns.exit_date,
                     returns.gross_security_return,
                     candidate.factor_rank,
                     candidate.return_rank,
@@ -442,7 +456,7 @@ def _run_metric_job(
                     candidate.top_low_selected
                 FROM read_parquet({source}) candidate
                 JOIN (
-                    SELECT date, code, portfolio_id, gross_security_return
+                    SELECT date, code, portfolio_id, exit_date, gross_security_return
                     FROM read_parquet({returns_source})
                     WHERE date
                           BETWEEN CAST({storage.sql_literal(context_begin)} AS DATE)
@@ -455,7 +469,10 @@ def _run_metric_job(
             )
             engine._insert_ic(block[0], block[-1])
             engine._create_position_tables()
-            engine._insert_returns(block[0], block[-1])
+            engine._insert_returns(
+                block[0], block[-1], signal_dates=f"SELECT * FROM read_parquet({signals})",
+                quotes_available=False,
+            )
             storage.execute("COMMIT")
         except Exception as exc:
             try:
@@ -672,6 +689,7 @@ def _waiting_worker_entry(
                 candidate_glob=candidate_glob,
                 returns_glob=returns_glob,
                 shard_directory=shard_directory,
+                signal_dates_path=workspace / "signal_dates.parquet",
             )
             result_queue.put(
                 {

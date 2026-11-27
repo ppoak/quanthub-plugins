@@ -1,78 +1,27 @@
 from __future__ import annotations
 
+from pathlib import Path
+from typing import Sequence
+
+from .check import (
+    EVALUATION_FILES,
+    PORTFOLIO_ACCOUNTING,
+    check_evaluation_config,
+    evaluation_config,
+)
+
 from .shared import (
     EVALUATION_VARIANTS,
     Any,
-    Mapping,
-    Path,
-    _chunks,
     _ColumnState,
     _parse_memory_bytes,
-    dataset_manifest,
-    duckdb,
-    evaluation_files_match,
-    manifests_match,
+    _sql_list,
     read_config,
+    resolve_output_root,
 )
 
 
 class _EvaluationStateMixin:
-    def _run_reference_refresh(self) -> None:
-        """Refresh correlation metrics without rebuilding unchanged returns."""
-
-        states = tuple(state for state in self._states if state.reference_refresh)
-        if not states:
-            return
-        full_begin = max(self.begin, self.factor_range[0])
-        full_end = self.end
-        full_dates = tuple(
-            signal_date
-            for signal_date in self.signal_dates
-            if full_begin <= signal_date <= full_end
-        )
-        if not full_dates:
-            return
-        previous_tasks = self.tasks
-        self.tasks = ("correlation",)
-        self._reference_refresh_active = True
-        previous_batch_size = self._reference_correlation_batch_size
-        self._reference_correlation_batch_size = max(
-            self.settings.reference_correlation_batch_size,
-            min(8, len(self.reference_factors)),
-        )
-        try:
-            for state in states:
-                factor_literal = self.storage.sql_literal(state.factor_column)
-                cutoff_literal = self.storage.sql_literal(full_begin)
-                self.storage.execute(
-                    "DELETE FROM _evaluation_correlation "
-                    f"WHERE factor_column = {factor_literal} "
-                    f"AND date >= CAST({cutoff_literal} AS DATE)"
-                )
-                refresh_date_batch_days = min(
-                    self.date_batch_days,
-                    self.settings.reference_refresh_date_batch_days,
-                )
-                blocks = tuple(
-                    tuple(block)
-                    for block in _chunks(full_dates, refresh_date_batch_days)
-                )
-                column = (state.factor_column,)
-                self._active_factor_batch = column
-                try:
-                    for block in blocks:
-                        self._process_factor_date_block(block, column)
-                finally:
-                    self._drop_temp_relations(
-                        self._factor_batch_relation,
-                        self._factor_variants_relation,
-                    )
-                    self._active_factor_batch = ()
-        finally:
-            self._reference_correlation_batch_size = previous_batch_size
-            self._reference_refresh_active = False
-            self.tasks = previous_tasks
-
     def _validate_quote_schema(self) -> None:
         source = self.storage._table_scan_source("quotes_day")
         columns = {
@@ -114,49 +63,11 @@ class _EvaluationStateMixin:
                 + ", ".join(missing)
             )
 
-    def _manifest(self, dataset: str, through: str | None) -> dict[str, Any]:
-        key = (dataset, through)
-        if key not in self._manifest_cache:
-            root = self.storage.table_root(dataset)
-            self._manifest_cache[key] = dataset_manifest(
-                root.parent,
-                root.name,
-                through=through,
-            )
-        return self._manifest_cache[key]
-
-    def _manifest_prefix_matches_current(
-        self,
-        stored: Any,
-        dataset: str,
-    ) -> bool:
-        """Accept an unchanged historical prefix for incremental evaluation."""
-
-        if not isinstance(stored, Mapping):
-            return False
-        through = stored.get("through")
-        return isinstance(through, str) and manifests_match(
-            stored,
-            self._manifest(dataset, through),
-        )
-
-    def _stored_manifest_covers_current(
-        self,
-        stored: Any,
-        dataset: str,
-        required_through: str,
-    ) -> bool:
-        """Accept a validated prefix that covers the requested interval."""
-
-        if not isinstance(stored, Mapping):
-            return False
-        through = stored.get("through")
-        if not isinstance(through, str) or through < required_through:
-            return False
-        return manifests_match(stored, self._manifest(dataset, through))
-
     def _semantic_parameters(self) -> dict[str, Any]:
         return {
+            "begin": self.begin,
+            "portfolio_accounting": PORTFOLIO_ACCOUNTING,
+            "missing_signal": self.cfg.missing_signal,
             "horizon_days": self.cfg.horizon_days,
             "execution_lag_days": self.cfg.execution_lag_days,
             "price_col": self.cfg.price_col,
@@ -170,139 +81,74 @@ class _EvaluationStateMixin:
             "reference_factors": list(self.reference_factors),
         }
 
-    def _column_states(
-        self,
-        current_factor_manifest: Mapping[str, Any],
-    ) -> tuple[_ColumnState, ...]:
-        states: list[_ColumnState] = []
+    def _column_states(self) -> tuple[_ColumnState, ...]:
+        states = []
         for column in self.factor_columns:
             destination = self.output_root / column
-            config_path = destination / "config.json"
-            config = read_config(config_path)
-            factor = config.get("factor", {})
-            if factor and (factor.get("name") != self.cfg.factor_name
-                    or factor.get("column") != column
-                    or factor.get("dataset", self.cfg.factor_name or "_factor_data") != self.factor_source
-                    or factor.get("path") != (self.cfg.factor_data.as_posix() if self.cfg.factor_data else None)):
-                raise ValueError("existing results identify another input")
-            reusable = self._can_reuse_metrics(config, destination)
-            incremental = reusable and self._can_increment(config)
-            reference_refresh = (
-                reusable and not incremental and self._can_reference_refresh(config)
-            )
-            cutoff = self.begin
-            if incremental or reference_refresh:
-                last_date = self._last_date(destination / "returns.csv")
-                next_date = self._next_signal_date(last_date)
-                cutoff = next_date if next_date is not None else "9999-12-31"
-                selection_probe = _ColumnState(
-                    factor_column=column,
-                    output_dir=destination,
-                    config=config,
-                    cutoff=cutoff,
-                    incremental=True,
-                    reference_refresh=reference_refresh,
-                )
-                if len(self._stored_selection_rows(selection_probe)) != len(
-                    EVALUATION_VARIANTS
-                ):
-                    incremental = False
-                    reference_refresh = False
-                    cutoff = self.begin
-            states.append(
-                _ColumnState(
-                    factor_column=column,
-                    output_dir=destination,
-                    config=config,
-                    cutoff=cutoff,
-                    incremental=incremental or reference_refresh,
-                    reference_refresh=reference_refresh,
-                )
-            )
+            config = evaluation_config(read_config(destination / "config.json"))
+            factor = config.get("factor")
+            if factor and (
+                factor.get("name") != self.cfg.factor_name
+                or factor.get("column") != column
+                or config.get("input") != self.input
+            ):
+                raise ValueError(f"existing results identify another input: {destination}")
+            if (self.cfg.factor_name and set(self.tasks) != {"ic", "portfolio", "correlation"}
+                    and set(config.get("files", {})) == set(EVALUATION_FILES.values())
+                    and self.output_root == resolve_output_root(
+                        "artifacts/factor_zoo", project_root=self.project_root
+                    ) / self.cfg.factor_name):
+                raise ValueError("single-task evaluation cannot replace a complete package bundle; use --output-dir")
+            defaults = {
+                metric: ("9999-12-31" if metric == "correlation" and not self.reference_factors
+                         else self.begin)
+                for metric in EVALUATION_FILES
+            }
+            state = _ColumnState(column, destination, config, defaults, False)
+            if not self.cfg.rebuild and set(self.tasks) == {"ic", "portfolio", "correlation"}:
+                try:
+                    state = self._resume_column(state)
+                except ValueError as exc:
+                    if self.cfg.daily_update:
+                        raise ValueError(f"incremental evaluation blocked: {exc}") from exc
+            states.append(state)
         return tuple(states)
 
-    def _can_reuse_metrics(self, config: Mapping[str, Any], destination: Path) -> bool:
-        """Check shared prerequisites for tail and reference-only refreshes."""
-        evaluation = config.get("evaluation")
-        if set(self.tasks) != {"ic", "portfolio", "correlation"} or self.cfg.rebuild or not isinstance(evaluation, Mapping):
-            return False
-        stored_end = evaluation.get("requested_end")
-        return (
-            evaluation.get("status") == "complete"
-            and evaluation.get("begin") == self.begin
-            and evaluation.get("parameters") == self._semantic_parameters()
-            and isinstance(stored_end, str)
-            and self.requested_end >= stored_end
-            and isinstance(evaluation.get("source_manifests"), Mapping)
-            and evaluation_files_match(destination, evaluation)
+    def _resume_column(self, state: _ColumnState) -> _ColumnState:
+        destination = state.output_dir
+        config = check_evaluation_config(
+            destination, factor_name=self.cfg.factor_name, factor_source=self.cfg.storage_factor_name,
+            factor_data=self.cfg.factor_data, project_root=self.project_root,
         )
+        if config["parameters"].get("portfolio_accounting") != PORTFOLIO_ACCOUNTING:
+            raise ValueError(f"portfolio accounting changed: {destination}; rebuild evaluation")
+        if config["parameters"] != self._semantic_parameters():
+            raise ValueError(f"evaluation parameters changed: {destination}; rebuild evaluation")
+        if len(self._stored_selection_rows(state)) != len(EVALUATION_VARIANTS):
+            raise ValueError(f"existing selection cannot be recovered: {destination}")
 
-    def _can_increment(self, config: Mapping[str, Any]) -> bool:
-        """Reuse metric prefixes after checking each source snapshot."""
-        manifests = config["evaluation"]["source_manifests"]
-        if not self._manifest_prefix_matches_current(
-            manifests.get("factor"),
-            self.factor_source,
-        ):
-            return False
-        if not self._manifest_prefix_matches_current(
-            manifests.get("quotes_day"),
-            "quotes_day",
-        ):
-            return False
-        if not self._manifest_prefix_matches_current(
-            manifests.get("industry_mapping"),
-            "industry_mapping",
-        ):
-            return False
-        references = manifests.get("references", {})
-        if not isinstance(references, Mapping):
-            return False
-        for table, stored in references.items():
-            if not isinstance(table, str) or not self._manifest_prefix_matches_current(
-                stored, table
-            ):
-                return False
-        return True
-
-    def _can_reference_refresh(self, config: Mapping[str, Any]) -> bool:
-        """Reuse IC and returns when only reference-factor snapshots changed."""
-        evaluation = config["evaluation"]
-        if evaluation.get("status") != "complete":
-            return False
-        manifests = evaluation["source_manifests"]
-        for dataset in (self.factor_source, "quotes_day", "industry_mapping"):
-            if not self._manifest_prefix_matches_current(
-                manifests.get(dataset if dataset != self.factor_source else "factor"),
-                dataset,
-            ):
-                return False
-        references = manifests.get("references")
-        if not isinstance(references, Mapping) or not references:
-            return False
-        changed = False
-        for table, stored in references.items():
-            if not isinstance(table, str):
-                return False
-            if not self._manifest_prefix_matches_current(stored, table):
-                changed = True
-        return changed
+        cutoffs = {}
+        for metric, filename in EVALUATION_FILES.items():
+            if metric == "correlation" and not self.reference_factors:
+                cutoffs[metric] = "9999-12-31"
+                continue
+            path = destination / filename
+            date = self._last_date(path)
+            if date is None:
+                raise ValueError(f"existing result has no valid cutoff: {path}")
+            if date > self.mature_end:
+                raise ValueError(f"existing result date {date} is ahead of the evaluable range: {path}")
+            cutoffs[metric] = self._next_signal_date(date) or "9999-12-31"
+        return _ColumnState(state.factor_column, destination, config, cutoffs, True)
 
     def _last_date(self, path: Path) -> str | None:
-        if not path.is_file():
-            return None
-        try:
-            row = self.storage.execute(
-                "SELECT MAX(TRY_CAST(date AS DATE)) FROM read_csv_auto(?, header=TRUE)",
-                [path.as_posix()],
-            ).fetchone()
-            return row[0].isoformat() if row and row[0] is not None else None
-        except duckdb.Error:
-            return None
+        row = self.storage.execute(
+            "SELECT MAX(CAST(date AS DATE)) FROM read_csv_auto(?, header=TRUE)",
+            [path.as_posix()],
+        ).fetchone()
+        return row[0].isoformat() if row and row[0] is not None else None
 
-    def _next_signal_date(self, value: str | None) -> str | None:
-        if value is None:
-            return self.begin
+    def _next_signal_date(self, value: str) -> str | None:
         for day in self.signal_dates:
             if day > value:
                 return day
@@ -325,40 +171,53 @@ class _EvaluationStateMixin:
             """
             CREATE TEMP TABLE _evaluation_cutoffs (
                 factor_column VARCHAR NOT NULL,
-                cutoff DATE NOT NULL,
-                incremental BOOLEAN NOT NULL
+                ic DATE NOT NULL,
+                returns DATE NOT NULL,
+                correlation DATE NOT NULL
             )
             """
         )
         self.storage.executemany(
-            "INSERT INTO _evaluation_cutoffs VALUES (?, ?, ?)",
+            "INSERT INTO _evaluation_cutoffs VALUES (?, ?, ?, ?)",
             [
-                (state.factor_column, state.cutoff, state.incremental)
+                (state.factor_column, *(state.cutoffs[metric] for metric in EVALUATION_FILES))
                 for state in self._states
             ],
         )
 
-    def _context_begin(self, signal_date: str) -> str:
-        """Return the earliest signal date needed for a turnover context."""
+    def _turnover_context_begin(self, signal_date: str, columns: Sequence[str]) -> str:
+        """Find the last realized positions for each staggered portfolio and layer."""
 
-        signal_index = self._calendar_index[signal_date]
-        context_index = max(
-            self._anchor_signal_index,
-            # Period-end exit filtering removes horizon + lag signal dates.
-            # Include the preceding cycle for every staggered portfolio.
-            signal_index
-            - (3 * self.cfg.horizon_days + self.cfg.execution_lag_days - 1),
-        )
-        return self.quote_dates[context_index]
+        if "portfolio" not in self.tasks:
+            return signal_date
+        columns_sql = _sql_list(self.storage, columns)
+        first_signal = self.storage.sql_literal(signal_date)
+        row = self.storage.execute(
+            f"""
+            SELECT MIN(last_date) FROM (
+                SELECT MAX(date) AS last_date
+                FROM (
+                    SELECT factor_column, variant, portfolio_id, layer, date
+                    FROM _evaluation_returns
+                    WHERE observations > 0
+                    UNION ALL
+                    SELECT factor_column, variant, portfolio_id, layer, last_date
+                    FROM _layer_nav_seed
+                ) history
+                WHERE factor_column IN ({columns_sql})
+                  AND date < CAST({first_signal} AS DATE)
+                GROUP BY factor_column, variant, portfolio_id, layer
+            ) latest
+            """
+        ).fetchone()
+        return row[0].isoformat() if row[0] is not None else signal_date
 
     def _factor_context_begin(self, signal_date: str) -> str:
-        """Return context needed by turnover and rolling neutralized values."""
+        """Include the complete rolling trading-day window for the first signal."""
 
-        turnover_index = self._calendar_index[self._context_begin(signal_date)]
-        # The previous portfolio needs its own complete rolling window.
         context_index = max(
             self._anchor_signal_index,
-            turnover_index - self.cfg.rolling_mean_days + 1,
+            self._calendar_index[signal_date] - self.cfg.rolling_mean_days + 1,
         )
         return self.quote_dates[context_index]
 

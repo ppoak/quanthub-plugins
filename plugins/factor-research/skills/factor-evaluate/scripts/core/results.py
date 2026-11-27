@@ -1,19 +1,14 @@
 from __future__ import annotations
 
-from factor_protocol.artifacts import manifest_reference
 from .selection import read_selection_rows, selection_query
 from .shared import (
     EVALUATION_COLUMNS,
     EVALUATION_FILES,
     EVALUATION_VARIANTS,
     Any,
-    FactorPath,
-    Mapping,
     Path,
     _ColumnState,
-    _empty_metric_query,
     _sql_list,
-    copy_if_present,
     datetime,
     evaluation_files,
     shutil,
@@ -195,7 +190,7 @@ class _EvaluationResultsMixin:
         factor_literal = self.storage.sql_literal(state.factor_column)
         if metric == "ic":
             new_query = f"""
-                SELECT date, variant, ic, observations
+                SELECT date, variant, ic, observations, exit_date
                 FROM _evaluation_ic
                 WHERE factor_column = {factor_literal}
             """
@@ -239,13 +234,10 @@ class _EvaluationResultsMixin:
 
         parts: list[str] = []
         existing = state.output_dir / EVALUATION_FILES[metric]
-        preserve_existing = state.incremental and existing.is_file()
-        if metric == "correlation" and state.reference_refresh:
-            preserve_existing = False
-        if preserve_existing:
+        if state.incremental:
             literal = self.storage.sql_literal(existing.as_posix())
             selected = ", ".join(EVALUATION_COLUMNS[metric])
-            existing_cutoff_literal = self.storage.sql_literal(state.cutoff)
+            existing_cutoff_literal = self.storage.sql_literal(state.cutoffs[metric])
             parts.append(
                 f"""
                 SELECT {selected}
@@ -253,10 +245,7 @@ class _EvaluationResultsMixin:
                 WHERE CAST(date AS DATE) < CAST({existing_cutoff_literal} AS DATE)
                 """
             )
-        has_new_rows = state.cutoff <= self.end
-        if metric == "correlation" and state.reference_refresh:
-            has_new_rows = True
-        parts.append(new_query if has_new_rows else _empty_metric_query(metric))
+        parts.append(new_query)
         return (
             "SELECT * FROM ("
             + "\nUNION ALL\n".join(parts)
@@ -269,109 +258,56 @@ class _EvaluationResultsMixin:
             "(FORMAT CSV, HEADER TRUE, DELIMITER ',')"
         )
 
-    def _source_manifests(self) -> dict[str, Any]:
-        last_signal_date = self.signal_dates[-1]
-        last_signal_index = self._calendar_index[last_signal_date]
-        quote_index = min(
-            last_signal_index + self.cfg.execution_lag_days + self.cfg.horizon_days,
-            len(self.quote_dates) - 1,
-        )
-        quote_through = self.quote_dates[quote_index]
-        references: dict[str, Any] = {}
-        for value in self.reference_factors:
-            table = FactorPath.parse(value).table
-            references[table] = manifest_reference(
-                self._manifest(table, last_signal_date)
-            )
-        return {
-            "factor": manifest_reference(
-                self._manifest(self.factor_source, last_signal_date)
-            ),
-            "quotes_day": manifest_reference(
-                self._manifest("quotes_day", quote_through)
-            ),
-            "industry_mapping": manifest_reference(
-                self._manifest("industry_mapping", last_signal_date)
-            ),
-            "references": references,
-        }
-
-    def _stage_column(
-        self,
-        state: _ColumnState,
-    ) -> Path:
+    def _stage_column(self, state: _ColumnState) -> Path:
         staging = stage_column_directory(state.output_dir)
         try:
-            if state.output_dir.exists():
-                selected = {"returns" if task == "portfolio" else task for task in self.cfg.tasks}
-                excluded = {*(EVALUATION_FILES[m] for m in selected), "config.json", "overview.png"}
-                for path in state.output_dir.iterdir():
-                    if path.is_file() and path.name not in excluded:
-                        shutil.copy2(path, staging / path.name)
-            selected = {"returns" if task == "portfolio" else task for task in self.cfg.tasks}
-            for metric, filename in EVALUATION_FILES.items():
-                if metric not in selected:
-                    continue
-                self._copy_query_to_csv(
-                    self._metric_query(state, metric),
-                    staging / filename,
-                )
-            payload = {
-                **state.config,
-                "factor": {
-                    **state.config.get("factor", {}),
-                    **({"name": self.cfg.factor_name} if self.cfg.factor_name else {}),
-                    "column": state.factor_column,
-                    **({"path": self.cfg.factor_data.as_posix()} if self.cfg.factor_data else {}),
-                    **(
-                        {"dataset": self.factor_source}
-                        if self.cfg.factor_name and self.factor_source != self.cfg.factor_name
-                        else {}
-                    ),
-                },
-                "evaluation": {
-                    "status": "complete",
-                    "begin": self.begin,
-                    "requested_end": self.requested_end,
-                    "parameters": self._semantic_parameters(),
-                    "resources": {
-                        "threads": self.cfg.threads,
-                        "memory_limit": self.cfg.memory_limit,
-                        "column_batch_size": self.column_batch_size,
-                        "date_batch_days": self.date_batch_days,
-                        "intra_column_workers": self.cfg.intra_column_workers,
-                    },
-                    "files": {name: digest for name, digest in evaluation_files(staging).items()},
-                    "source_manifests": self._source_manifests(),
-                    "completed_at": datetime.now(timezone.utc).isoformat(),
-                },
+            factor = {
+                **({"name": self.cfg.factor_name} if self.cfg.factor_name else {}),
+                "column": state.factor_column,
             }
-            evaluation = payload["evaluation"]
-            records = dict(state.config.get("evaluation", {}).get("tasks", {}))
-            # Legacy complete results can be adopted without changing their metrics.
-            previous = state.config.get("evaluation", {})
-            def signature(task, record):
-                parameters = dict(record["parameters"])
-                sources = dict(record["source_manifests"])
-                if task != "correlation":
-                    parameters.pop("reference_factors", None)
-                    sources.pop("references", None)
-                return {"begin": record["begin"], "requested_end": record["requested_end"],
-                        "parameters": parameters, "source_manifests": sources}
-            filenames = {"ic": "ic.csv", "portfolio": "returns.csv", "correlation": "correlation.csv"}
-            if not records and previous.get("status") == "complete":
-                records = {task: {**signature(task, previous),
-                    "sha256": previous["files"].get(filename)} for task, filename in filenames.items()}
-            for task in self.cfg.tasks:
-                records[task] = {**signature(task, evaluation),
-                    "sha256": evaluation["files"][filenames[task]]}
-            evaluation["tasks"] = records
-            complete = all(records.get(task) == {**signature(task, evaluation),
-                "sha256": evaluation["files"].get(filename)} for task, filename in filenames.items())
-            evaluation["status"] = "complete" if complete else "partial"
-            write_config(staging / "config.json", payload)
+            parameters = self._semantic_parameters()
+            previous_files = state.config.get("files", {})
+            previous_signal_end = state.config.get("partial_end")
+            previous_exit_end = state.config.get("partial_exit_end", previous_signal_end)
+            compatible = (state.config.get("factor") == factor
+                          and state.config.get("parameters") == parameters
+                          and state.config.get("input") == self.input)
+            selected = {"returns" if task == "portfolio" else task for task in self.tasks}
+            if state.output_dir.exists():
+                for path in state.output_dir.iterdir():
+                    if path.is_file() and path.name not in {
+                        *EVALUATION_FILES.values(), "config.json", "overview.png",
+                    }:
+                        shutil.copy2(path, staging / path.name)
+            for metric, filename in EVALUATION_FILES.items():
+                previous = state.output_dir / filename
+                if metric in selected:
+                    if state.incremental and state.cutoffs[metric] > self.mature_end:
+                        shutil.copy2(previous, staging / filename)
+                    else:
+                        self._copy_query_to_csv(self._metric_query(state, metric), staging / filename)
+                elif compatible and filename in previous_files and (
+                    (previous_signal_end == self.signal_end and previous_exit_end == self.exit_end)
+                    or (previous_signal_end is None
+                        and (self._last_date(previous) == self.mature_end
+                             or (metric == "correlation" and not self.reference_factors)))
+                ):
+                    shutil.copy2(previous, staging / filename)
+            files = evaluation_files(staging)
+            for metric, filename in EVALUATION_FILES.items():
+                if metric not in selected and filename in files and files[filename] != previous_files[filename]:
+                    raise ValueError(f"existing metric changed: {state.output_dir / filename}")
+            write_config(staging / "config.json", {
+                "factor": factor,
+                "parameters": parameters,
+                "files": files,
+                "completed_at": datetime.now(timezone.utc).isoformat(),
+                **({"input": self.input} if self.input is not None else {}),
+                **({"partial_end": self.signal_end} if len(files) != len(EVALUATION_FILES) else {}),
+                **({"partial_exit_end": self.exit_end}
+                   if len(files) != len(EVALUATION_FILES) and self.exit_end != self.signal_end else {}),
+            })
             return staging
         except Exception:
-            if staging.exists():
-                shutil.rmtree(staging)
+            shutil.rmtree(staging)
             raise

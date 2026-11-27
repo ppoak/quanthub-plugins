@@ -1,4 +1,4 @@
-"""Verify canonical evaluation metadata, input snapshots and metric files."""
+"""Verify evaluation metadata and metric files."""
 
 from __future__ import annotations
 
@@ -7,14 +7,46 @@ from datetime import date, datetime
 from pathlib import Path
 from typing import Any, Mapping
 
-from factor_protocol import FactorPath, resolve_data_root, resolve_factor_data_root
-from factor_protocol.artifacts import dataset_manifest, manifests_match, read_config
+from factor_protocol.artifacts import read_config
 
 EVALUATION_FILES = {
     "ic": "ic.csv",
     "returns": "returns.csv",
     "correlation": "correlation.csv",
 }
+PORTFOLIO_ACCOUNTING = "continuous_v2"
+MISSING_SIGNAL_POLICIES = ("hold", "liquidate")
+PARAMETERS = {
+    "begin", "train_end", "validation_end", "horizon_days", "execution_lag_days",
+    "price_col", "quantiles", "top_percentile", "rolling_mean_days", "industry_level",
+    "direction", "reference_factors",
+}
+
+
+def evaluation_config(config: dict[str, Any]) -> dict[str, Any]:
+    """Read current and legacy metric bundles without copying factor identity."""
+    old = config.get("evaluation")
+    if isinstance(old, Mapping) and old.get("status") == "complete" and all(
+        key in old for key in ("files", "parameters", "begin", "completed_at")
+    ):
+        parameters = {**old["parameters"], "begin": old["begin"]}
+        parameters.setdefault("direction", "auto")
+        config = {
+            **{key: config[key] for key in ("factor", "validation") if key in config},
+            "parameters": {key: value for key, value in parameters.items() if key in PARAMETERS},
+            "files": old["files"],
+            "completed_at": old["completed_at"],
+        }
+    factor = config.get("factor")
+    if not isinstance(factor, Mapping):
+        return config
+    result = {**config, "factor": {key: factor[key] for key in ("name", "column") if key in factor}}
+    alternate_input = factor.get("path") or factor.get("dataset")
+    if alternate_input and alternate_input != factor.get("name"):
+        result.setdefault("input", alternate_input)
+    if config.get("files") and set(config["files"]) != set(EVALUATION_FILES.values()) and factor.get("through"):
+        result.setdefault("partial_end", factor["through"])
+    return result
 
 
 def evaluation_files(output_dir: Path) -> dict[str, str]:
@@ -44,15 +76,12 @@ def check_evaluation_config(
     column_dir: Path,
     *,
     factor_name: str | None = None,
-    data_root: str | Path,
     project_root: str | Path,
     factor_source: str | None = None,
     factor_data: str | Path | None = None,
-    end: str | None = None,
-    manifest_cache: dict[tuple[str, str], dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
-    """Require complete metrics from unchanged input snapshots."""
-    config = read_config(column_dir / "config.json")
+    """Require a consistent, complete metric bundle."""
+    config = evaluation_config(read_config(column_dir / "config.json"))
     factor = config.get("factor")
     if not isinstance(factor, Mapping) or (
         factor.get("name") != factor_name or factor.get("column") != column_dir.name
@@ -60,101 +89,33 @@ def check_evaluation_config(
         raise ValueError(
             f"evaluation config identifies another factor output: {column_dir}"
         )
-    dataset = str(factor.get("dataset", factor_name or "_factor_data"))
-    if factor_source is not None and dataset != factor_source:
-        raise ValueError(f"evaluation config identifies another dataset: {column_dir}")
-    stored_path = factor.get("path")
     if factor_data is not None:
-        path = Path(factor_data)
-        expected = (Path(project_root) / path).resolve().as_posix()
-        if stored_path != expected:
-            raise ValueError(f"evaluation config identifies another input directory: {column_dir}")
-    factor_root = resolve_factor_data_root(project_root=project_root)
-    evaluation = config.get("evaluation")
-    if not isinstance(evaluation, Mapping) or evaluation.get("status") != "complete":
+        expected_input = (Path(project_root) / factor_data).resolve().as_posix()
+    else:
+        expected_input = factor_source if factor_source != factor_name else None
+    if (factor_data is not None or factor_source is not None) and config.get("input") != expected_input:
+        raise ValueError(f"evaluation config identifies another input: {column_dir}")
+    if not config.get("files"):
         raise ValueError(f"complete evaluation is required: {column_dir}")
-    parameters = evaluation.get("parameters")
-    required_parameters = {
-        "horizon_days",
-        "execution_lag_days",
-        "price_col",
-        "quantiles",
-        "top_percentile",
-        "rolling_mean_days",
-        "industry_level",
-        "train_end",
-        "validation_end",
-        "reference_factors",
-    }
-    if not isinstance(parameters, Mapping) or not required_parameters.issubset(
-        parameters
-    ):
+    parameters = config.get("parameters")
+    if not isinstance(parameters, Mapping) or set(parameters) - {"portfolio_accounting", "missing_signal"} != PARAMETERS:
         raise ValueError(f"evaluation parameters are missing: {column_dir}")
-    if parameters.get("direction", "auto") not in {"positive", "negative", "auto"}:
+    if parameters.get("portfolio_accounting") not in {None, "continuous", PORTFOLIO_ACCOUNTING}:
+        raise ValueError(f"unknown portfolio accounting: {column_dir}")
+    if parameters.get("missing_signal", "hold") not in MISSING_SIGNAL_POLICIES:
+        raise ValueError(f"invalid missing signal policy: {column_dir}")
+    if parameters["direction"] not in {"positive", "negative", "auto"}:
         raise ValueError(f"invalid evaluation direction: {column_dir}")
     try:
-        begin = date.fromisoformat(evaluation["begin"])
-        requested_end = date.fromisoformat(evaluation["requested_end"])
+        begin = date.fromisoformat(parameters["begin"])
         train_end = date.fromisoformat(parameters["train_end"])
         validation_end = date.fromisoformat(parameters["validation_end"])
-        datetime.fromisoformat(evaluation["completed_at"].replace("Z", "+00:00"))
+        datetime.fromisoformat(config["completed_at"].replace("Z", "+00:00"))
     except (KeyError, TypeError, ValueError) as exc:
         raise ValueError(f"evaluation dates are incomplete: {column_dir}") from exc
-    if not begin <= train_end < validation_end < requested_end:
+    if not begin <= train_end < validation_end:
         raise ValueError(f"evaluation periods are inconsistent: {column_dir}")
-    if end is not None and evaluation["requested_end"] != end:
-        raise ValueError(f"evaluation does not cover the requested end: {column_dir}")
-    if not evaluation_files_match(column_dir, evaluation):
+    if not evaluation_files_match(column_dir, config):
         raise ValueError(f"evaluation metric changed or is missing: {column_dir}")
 
-    cache = manifest_cache if manifest_cache is not None else {}
-    factor_sources = {dataset, *(FactorPath.parse(value).table for value in parameters["reference_factors"])}
-
-    def current_manifest(source: str, through: str) -> dict[str, Any]:
-        key = (source, through)
-        if key not in cache:
-            directory = (
-                Path(stored_path) if source == dataset and stored_path
-                else Path(factor_root if source in factor_sources else data_root) / source
-            )
-            cache[key] = dataset_manifest(directory.parent, directory.name, through=through)
-        return cache[key]
-
-    def require_snapshot(snapshot: Any, source: str) -> dict[str, Any]:
-        if not isinstance(snapshot, Mapping) or not isinstance(
-            snapshot.get("through"), str
-        ):
-            raise ValueError(
-                f"evaluation input snapshot is missing: {column_dir}: {source}"
-            )
-        manifest = current_manifest(source, snapshot["through"])
-        if not manifests_match(snapshot, manifest):
-            raise ValueError(f"evaluation input changed: {column_dir}: {source}")
-        return manifest
-
-    sources = evaluation.get("source_manifests")
-    if not isinstance(sources, Mapping):
-        raise ValueError(f"evaluation input snapshots are missing: {column_dir}")
-    factor_manifest = require_snapshot(sources.get("factor"), dataset)
-    last_trading_date = current_manifest("quotes_day", evaluation["requested_end"])[
-        "maximum_date"
-    ]
-    if factor_manifest["through"] != last_trading_date:
-        raise ValueError(
-            f"evaluation does not cover the last available trading date: {column_dir}"
-        )
-    factor_end = factor_manifest["maximum_date"]
-    if not factor_end:
-        raise ValueError(f"evaluation input is empty: {column_dir}")
-    for source in ("quotes_day", "industry_mapping"):
-        require_snapshot(sources.get(source), source)
-    references = sources.get("references")
-    expected = {
-        FactorPath.parse(value).table
-        for value in parameters.get("reference_factors", ())
-    }
-    if not isinstance(references, Mapping) or set(references) != expected:
-        raise ValueError(f"evaluation reference snapshots are incomplete: {column_dir}")
-    for source, snapshot in references.items():
-        require_snapshot(snapshot, source)
     return config

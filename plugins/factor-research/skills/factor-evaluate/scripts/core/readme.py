@@ -12,7 +12,6 @@ from typing import Any, Mapping, Sequence
 
 import duckdb
 from .validation import check_package_evaluation as check_evaluation_config
-from factor_protocol import resolve_data_root
 from factor_protocol.readme import set_acceptance
 from core.selection import read_selection_rows, selection_details
 
@@ -96,7 +95,7 @@ def _local_date(value: str) -> str:
 
 def _watermark(payload: Mapping[str, Any], column_dir: Path) -> str:
     filenames = ["ic.csv", "returns.csv"]
-    if payload["evaluation"]["parameters"].get("reference_factors"):
+    if payload["parameters"].get("reference_factors"):
         filenames.append("correlation.csv")
     dates: list[str] = []
     with duckdb.connect(":memory:", config={"threads": 1}) as connection:
@@ -235,22 +234,10 @@ def _test_metrics(
 
 
 def _evaluation_scope(payload: Mapping[str, Any]) -> tuple[dict[str, Any], str]:
-    evaluation = payload["evaluation"]
-    parameters = evaluation.get("parameters")
-    if not isinstance(parameters, dict) or not all(
-        isinstance(parameters.get(key), str) for key in ("train_end", "validation_end")
-    ):
-        raise IncompleteEvaluationArtifacts(
-            "evaluation config has incomplete period parameters"
-        )
-    sources = evaluation.get("source_manifests")
-    if not isinstance(sources, dict) or not sources:
-        raise IncompleteEvaluationArtifacts("evaluation config has no source snapshots")
+    parameters = payload["parameters"]
     signature = {
-        "begin": evaluation.get("begin"),
-        "requested_end": evaluation.get("requested_end"),
+        "begin": parameters["begin"],
         "parameters": parameters,
-        "source_manifests": sources,
     }
     return signature, parameters["validation_end"]
 
@@ -278,14 +265,14 @@ def _make_row(
     validation_end: str,
     connection: duckdb.DuckDBPyConnection,
 ) -> list[str]:
-    evaluation = payload["evaluation"]
+    parameters = payload["parameters"]
     selection = selection_details(
         read_selection_rows(
             connection,
             _csv_path(output_root, factor_name, column, "ic.csv"),
             column,
-            evaluation["parameters"],
-            str(evaluation["begin"]),
+            parameters,
+            parameters["begin"],
         ),
         column,
     )
@@ -304,10 +291,10 @@ def _make_row(
         variant=selected_variant,
         validation_end=validation_end,
         watermark=watermark,
-        has_references=bool(evaluation.get("parameters", {}).get("reference_factors")),
+        has_references=bool(parameters.get("reference_factors")),
     )
-    interval_begin = str(evaluation.get("begin") or "—")
-    completed_at = str(evaluation["completed_at"])
+    interval_begin = parameters["begin"]
+    completed_at = payload["completed_at"]
     test_date = _local_date(completed_at)
     cells: list[Any] = [
         test_date,
@@ -389,7 +376,6 @@ def update_factor_readme(
     factor_name: str,
     columns: Sequence[str],
     project_root: str | Path = ".",
-    data_root: str | Path | None = None,
     failures: Mapping[str, str] | None = None,
 ) -> bool:
     if not readme_path.is_file():
@@ -399,10 +385,6 @@ def update_factor_readme(
             f"no declared factor columns for {factor_name}"
         )
 
-    resolved_data_root = resolve_data_root(
-        project_root=project_root, data_root=data_root
-    )
-    manifest_cache: dict[tuple[str, str], dict[str, Any]] = {}
     payloads: dict[str, dict[str, Any]] = {}
     signatures: list[dict[str, Any]] = []
     watermarks: list[str] = []
@@ -415,9 +397,7 @@ def update_factor_readme(
             payload = check_evaluation_config(
                 config_path.parent,
                 factor_name=factor_name,
-                data_root=resolved_data_root,
                 project_root=project_root,
-                manifest_cache=manifest_cache,
             )
         except (OSError, ValueError) as exc:
             raise IncompleteEvaluationArtifacts(str(exc)) from exc

@@ -12,11 +12,8 @@ from pathlib import Path
 from typing import Any, Iterable, Mapping, Sequence
 
 import duckdb
-from .check import EVALUATION_FILES, evaluation_files, evaluation_files_match
+from .check import MISSING_SIGNAL_POLICIES, EVALUATION_FILES, evaluation_files, evaluation_files_match
 from factor_protocol.artifacts import (
-    copy_if_present,
-    dataset_manifest,
-    manifests_match,
     read_config,
     replace_column_directory,
     resolve_output_root,
@@ -51,9 +48,6 @@ __all__ = [
     "Sequence",
     "duckdb",
     "EVALUATION_VARIANTS",
-    "copy_if_present",
-    "dataset_manifest",
-    "manifests_match",
     "read_config",
     "replace_column_directory",
     "resolve_output_root",
@@ -85,10 +79,6 @@ SINGLE_COLUMN_DATE_BATCH_DAYS = 126
 # tens of millions of rows at once and spill the entire drive.
 REFRESH_COLUMN_BATCH_SIZE = 1
 REFRESH_DATE_BATCH_DAYS = 31
-# Reference-only refreshes use the same short date block as normal nightly
-# refreshes.  A wider block multiplies the factor/reference rank panels and
-# can exceed the DuckDB memory limit for wide packages such as chip factors.
-REFERENCE_REFRESH_DATE_BATCH_DAYS = 31
 REFERENCE_CORRELATION_BATCH_SIZE = 4
 PROBE_DATE_DAYS = 20
 
@@ -99,6 +89,7 @@ class EvaluationSettings:
 
     begin: str = DEFAULT_EVALUATION_BEGIN
     direction: str = "auto"
+    missing_signal: str = "hold"
     train_end: str = DEFAULT_TRAIN_END
     validation_end: str = DEFAULT_VALIDATION_END
     horizon_days: int = 5
@@ -121,7 +112,6 @@ class EvaluationSettings:
     single_column_date_batch_days: int = SINGLE_COLUMN_DATE_BATCH_DAYS
     refresh_column_batch_size: int = REFRESH_COLUMN_BATCH_SIZE
     refresh_date_batch_days: int = REFRESH_DATE_BATCH_DAYS
-    reference_refresh_date_batch_days: int = REFERENCE_REFRESH_DATE_BATCH_DAYS
     reference_correlation_batch_size: int = REFERENCE_CORRELATION_BATCH_SIZE
     probe_date_days: int = PROBE_DATE_DAYS
 
@@ -143,6 +133,7 @@ class EvaluationSettings:
 
         settings = cls(
             direction=value("FACTOR_EVALUATE_DIRECTION", "auto").lower(),
+            missing_signal=value("FACTOR_EVALUATE_MISSING_SIGNAL", "hold").lower(),
             begin=value("FACTOR_EVALUATE_BEGIN", DEFAULT_EVALUATION_BEGIN),
             train_end=value("FACTOR_EVALUATE_TRAIN_END", DEFAULT_TRAIN_END),
             validation_end=value(
@@ -192,10 +183,6 @@ class EvaluationSettings:
             refresh_date_batch_days=integer(
                 "FACTOR_EVALUATE_REFRESH_DATE_BATCH_DAYS", REFRESH_DATE_BATCH_DAYS
             ),
-            reference_refresh_date_batch_days=integer(
-                "FACTOR_EVALUATE_REFERENCE_REFRESH_DATE_BATCH_DAYS",
-                REFERENCE_REFRESH_DATE_BATCH_DAYS,
-            ),
             reference_correlation_batch_size=integer(
                 "FACTOR_EVALUATE_REFERENCE_CORRELATION_BATCH_SIZE",
                 REFERENCE_CORRELATION_BATCH_SIZE,
@@ -208,6 +195,8 @@ class EvaluationSettings:
     def validate(self) -> None:
         if self.direction not in {"positive", "negative", "auto"}:
             raise ValueError("direction must be positive, negative or auto")
+        if self.missing_signal not in MISSING_SIGNAL_POLICIES:
+            raise ValueError("missing_signal must be hold or liquidate")
         positive = {
             "horizon_days": self.horizon_days,
             "quantiles": self.quantiles,
@@ -221,7 +210,6 @@ class EvaluationSettings:
             "single_column_date_batch_days": self.single_column_date_batch_days,
             "refresh_column_batch_size": self.refresh_column_batch_size,
             "refresh_date_batch_days": self.refresh_date_batch_days,
-            "reference_refresh_date_batch_days": self.reference_refresh_date_batch_days,
             "reference_correlation_batch_size": self.reference_correlation_batch_size,
             "probe_date_days": self.probe_date_days,
         }
@@ -270,7 +258,7 @@ def _read_dotenv(path: Path) -> dict[str, str]:
     return values
 
 
-IC_COLUMNS = ("date", "variant", "ic", "observations")
+IC_COLUMNS = ("date", "variant", "ic", "observations", "exit_date")
 CORRELATION_COLUMNS = (
     "date",
     "variant",
@@ -313,24 +301,6 @@ _RETURNS_SQL_TYPES = {
     "top_holdings": "BIGINT",
     "top_observations": "BIGINT",
 }
-_EMPTY_METRIC_TYPES = {
-    "ic": (
-        ("date", "DATE"),
-        ("variant", "VARCHAR"),
-        ("ic", "DOUBLE"),
-        ("observations", "BIGINT"),
-    ),
-    "returns": tuple(
-        (column, _RETURNS_SQL_TYPES.get(column, "DOUBLE")) for column in RETURNS_COLUMNS
-    ),
-    "correlation": (
-        ("date", "DATE"),
-        ("variant", "VARCHAR"),
-        ("reference_factor", "VARCHAR"),
-        ("correlation", "DOUBLE"),
-        ("observations", "BIGINT"),
-    ),
-}
 _STAGE_TABLE_DEFINITIONS = {
     "_evaluation_ic": (
         "factor_column VARCHAR",
@@ -338,6 +308,7 @@ _STAGE_TABLE_DEFINITIONS = {
         "variant VARCHAR",
         "ic DOUBLE",
         "observations BIGINT",
+        "exit_date DATE",
     ),
     "_evaluation_returns": (
         "factor_column VARCHAR",
@@ -374,6 +345,7 @@ _STAGE_TABLE_DEFINITIONS = {
         "variant VARCHAR",
         "portfolio_id INTEGER",
         "layer INTEGER",
+        "last_date DATE",
         "gross_seed DOUBLE",
         "net_seed DOUBLE",
     ),
@@ -408,6 +380,7 @@ class EvaluationConfig:
     factor_module: str | None = None
     begin: str | None = DEFAULT_EVALUATION_BEGIN
     direction: str = "auto"
+    missing_signal: str = "hold"
     train_end: str = DEFAULT_TRAIN_END
     validation_end: str = DEFAULT_VALIDATION_END
     end: str | None = None
@@ -431,14 +404,19 @@ class EvaluationConfig:
     intra_column_workers: int = 1
     tasks: tuple[str, ...] = ("ic", "portfolio", "correlation")
     rebuild: bool = False
+    daily_update: bool = False
     project_root: str | Path | None = None
     settings: EvaluationSettings | None = None
 
     def validate(self) -> None:
         if self.direction not in {"positive", "negative", "auto"}:
             raise ValueError("direction must be positive, negative or auto")
+        if self.missing_signal not in MISSING_SIGNAL_POLICIES:
+            raise ValueError("missing_signal must be hold or liquidate")
         if not self.tasks or set(self.tasks) - {"ic", "portfolio", "correlation"}:
             raise ValueError("tasks must select ic, portfolio or correlation")
+        if self.daily_update and (self.rebuild or set(self.tasks) != {"ic", "portfolio", "correlation"}):
+            raise ValueError("daily evaluation requires a complete incremental refresh")
         if self.factor_data is not None:
             if self.factor_name is not None or self.storage_factor_name is not None:
                 raise ValueError("factor_data cannot be combined with a package or storage name")
@@ -504,9 +482,12 @@ class _ColumnState:
     factor_column: str
     output_dir: Path
     config: dict[str, Any]
-    cutoff: str
+    cutoffs: dict[str, str]
     incremental: bool
-    reference_refresh: bool = False
+
+    @property
+    def cutoff(self) -> str:
+        return min(self.cutoffs.values())
 
 
 def _chunks(values: Sequence[Any], size: int) -> Iterable[Sequence[Any]]:
@@ -552,14 +533,6 @@ def _partition_dates(root: Path) -> list[str]:
 
 def _sql_list(storage: FactorStorage, values: Sequence[str]) -> str:
     return ", ".join(storage.sql_literal(value) for value in values)
-
-
-def _empty_metric_query(metric: str) -> str:
-    columns = _EMPTY_METRIC_TYPES[metric]
-    selected = ", ".join(
-        f"CAST(NULL AS {sql_type}) AS {column}" for column, sql_type in columns
-    )
-    return f"SELECT {selected} WHERE FALSE"
 
 
 def print_progress(label: str, completed: int, total: int, started: float, *, failed: int = 0) -> None:

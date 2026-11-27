@@ -254,13 +254,13 @@ class _CorrelationMixin:
         if not self.reference_factors:
             return
         candidates = self.storage.identifier(candidate_relation)
-        needs_cutoff = self._block_requires_cutoff(block_begin)
+        needs_cutoff = self._block_requires_cutoff(block_begin, "correlation")
         cutoff_join = (
             "JOIN _evaluation_cutoffs cutoff USING (factor_column)"
             if needs_cutoff
             else ""
         )
-        cutoff_filter = "AND candidate.date >= cutoff.cutoff" if needs_cutoff else ""
+        cutoff_filter = "AND candidate.date >= cutoff.correlation" if needs_cutoff else ""
         reference_ids = tuple(reference_id for reference_id, _ in self._reference_labels)
         batches = tuple(
             tuple(batch)

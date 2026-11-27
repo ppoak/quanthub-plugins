@@ -38,6 +38,7 @@ from .shared import (
     resolve_output_root,
     shutil,
     validate_identifier,
+    write_config,
 )
 from .state import _EvaluationStateMixin
 
@@ -60,6 +61,11 @@ class _EvaluationEngine(
         self.settings = cfg.settings or EvaluationSettings()
         self.project_root = project_root
         self.factor_source = validate_identifier(factor_source, "factor_source")
+        self.input = (
+            cfg.factor_data.as_posix() if cfg.factor_data is not None
+            else cfg.storage_factor_name if cfg.storage_factor_name != cfg.factor_name
+            else None
+        )
         self.factor_columns = tuple(
             validate_identifier(column, "factor_column") for column in factor_columns
         )
@@ -78,19 +84,22 @@ class _EvaluationEngine(
         if self.factor_range is None:
             raise ValueError(f"factor data is unavailable: {self.factor_source}")
         self.begin = cfg.begin or self.factor_range[0]
-        self.requested_end = cfg.end or self.factor_range[1]
-        if self.begin > self.requested_end:
+        requested_end = cfg.end or self.factor_range[1]
+        signal_target = min(requested_end, self.factor_range[1])
+        if self.begin > signal_target:
             raise ValueError("evaluation begin must not be later than end")
         self.quote_dates = _partition_dates(self.data_root / "quotes_day")
         self.signal_dates = [
             value
             for value in self.quote_dates
-            if self.begin <= value <= self.requested_end
+            if self.begin <= value <= signal_target
         ]
         if not self.signal_dates:
             raise ValueError("evaluation range contains no trading dates")
-        self.end = self.signal_dates[-1]
-        if not self.begin <= self.cfg.train_end < self.cfg.validation_end < self.end:
+        self.signal_end = self.signal_dates[-1]
+        if cfg.daily_update and self.signal_end != self.factor_range[1]:
+            raise ValueError("daily evaluation requires the latest committed factor date")
+        if not self.begin <= self.cfg.train_end < self.cfg.validation_end < self.signal_end:
             raise ValueError(
                 "evaluation dates must satisfy "
                 "begin <= train_end < validation_end < last trading date"
@@ -99,7 +108,15 @@ class _EvaluationEngine(
             value: index for index, value in enumerate(self.quote_dates)
         }
         self._anchor_signal_index = self._calendar_index[self.signal_dates[0]]
-        self._manifest_cache: dict[tuple[str, str | None], dict[str, Any]] = {}
+        self.exit_end = (
+            self.signal_end if cfg.daily_update
+            else max(value for value in self.quote_dates if value <= requested_end)
+        )
+        last_mature_index = self._calendar_index[self.exit_end] - cfg.horizon_days - cfg.execution_lag_days
+        self.mature_end = (
+            min(self.signal_end, self.quote_dates[last_mature_index])
+            if last_mature_index >= 0 else ""
+        )
         self._states: tuple[_ColumnState, ...] = ()
         self.column_batch_size = self.settings.default_column_batch_size
         self.date_batch_days = self.settings.default_date_batch_days
@@ -113,7 +130,6 @@ class _EvaluationEngine(
             tuple[str, tuple[str, ...], tuple[str, ...], tuple[int, ...]], ...
         ] = ()
         self._reference_labels: tuple[tuple[int, str], ...] = ()
-        self._reference_refresh_active = False
         self._reference_correlation_batch_size = (
             self.settings.reference_correlation_batch_size
         )
@@ -121,10 +137,17 @@ class _EvaluationEngine(
     def run(self) -> tuple[Path, list[tuple[Path, Path]]]:
         label = f"Evaluate {self.cfg.factor_name or self.cfg.factor_data} [{', '.join(self.factor_columns)}]"
         print(f"{label} | phase=preparing data", flush=True)
+        self._states = self._column_states()
+        result = self._states[0].output_dir if len(self._states) == 1 else self.output_root
+        if all(state.incremental and state.cutoff > self.mature_end for state in self._states):
+            for state in self._states:
+                if "validation" in state.config:
+                    config = {key: value for key, value in state.config.items() if key != "validation"}
+                    write_config(state.output_dir / "config.json", config)
+            print(f"{label} | phase=no new eligible dates", flush=True)
+            return result, []
         self._validate_quote_schema()
         self._validate_industry_schema()
-        current_factor_manifest = self._manifest(self.factor_source, self.end)
-        self._states = self._column_states(current_factor_manifest)
         self._create_calendar()
         self.column_batch_size, self.date_batch_days = self._batch_sizes()
         self._create_stage_tables()
@@ -134,7 +157,7 @@ class _EvaluationEngine(
         # Evaluation still records the requested begin date in config, while
         # metrics naturally start at the first available factor date.
         effective_begin = max(process_begin, self.factor_range[0])
-        process_dates = [date for date in self.signal_dates if date >= effective_begin]
+        process_dates = [date for date in self.signal_dates if effective_begin <= date <= self.mature_end]
         if process_dates:
             blocks = tuple(
                 tuple(block) for block in _chunks(process_dates, self.date_batch_days)
@@ -147,9 +170,14 @@ class _EvaluationEngine(
             # neutralized panels exceed the DuckDB memory limit on long runs.
             for batch in _chunks(self.factor_columns, self.column_batch_size):
                 batch_columns = tuple(batch)
+                batch_begin = min(state.cutoff for state in self._states
+                                  if state.factor_column in batch_columns)
                 self._active_factor_batch = batch_columns
                 try:
                     for block in blocks:
+                        block = tuple(day for day in block if day >= batch_begin)
+                        if not block:
+                            continue
                         print(f"{label} | dates={block[0]} -> {block[-1]} | "
                               f"columns={', '.join(batch_columns)}", flush=True)
                         self._process_factor_date_block(tuple(block), batch_columns)
@@ -161,9 +189,6 @@ class _EvaluationEngine(
                         self._factor_variants_relation,
                     )
                     self._active_factor_batch = ()
-        if any(state.reference_refresh for state in self._states):
-            print(f"{label} | phase=refreshing reference correlations", flush=True)
-            self._run_reference_refresh()
         self._drop_temp_relations(
             *(spec[0] for spec in self._reference_specs),
             "_reference_long",
@@ -180,7 +205,6 @@ class _EvaluationEngine(
             (self._stage_column(state), state.output_dir)
             for state in self._states
         ]
-        result = self._states[0].output_dir if len(self._states) == 1 else self.output_root
         return result, staged_columns
 
 

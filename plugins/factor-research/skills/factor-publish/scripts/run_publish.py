@@ -346,7 +346,6 @@ def stage_evaluation_assets(
     factor_name: str,
     output_dir: str | Path,
     stage_dir: str | Path,
-    data_root: str | Path,
     project_root: str | Path,
     declared_columns: Sequence[str],
 ) -> list[EvaluationAsset]:
@@ -362,7 +361,6 @@ def stage_evaluation_assets(
     spec = importlib.util.spec_from_file_location("factor_evaluation_check", checker_path)
     checker = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(checker)
-    manifest_cache = {}
 
     started = monotonic()
     for index, column_dir in enumerate(columns, 1):
@@ -371,9 +369,7 @@ def stage_evaluation_assets(
         checker.check_package_evaluation(
             column_dir,
             factor_name=factor_name,
-            data_root=data_root,
             project_root=project_root,
-            manifest_cache=manifest_cache,
         )
         paths = {metric: column_dir / metric for metric in METRIC_FILES}
         missing_files = [metric for metric, path in paths.items() if not path.is_file()]
@@ -700,7 +696,6 @@ def publish_assets(
             factor_name=factor_name,
             output_dir=resolved_output_dir,
             stage_dir=temporary,
-            data_root=resolved_data_root,
             project_root=factor_project_root,
             declared_columns=declared_columns,
         )

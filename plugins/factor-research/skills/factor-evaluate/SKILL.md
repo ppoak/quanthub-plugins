@@ -15,7 +15,7 @@ description: 评估因子包或已有评分数据，计算 IC、组合收益和�
 
 选择一种输入：
 
-- `--factor-package <name>`：评估因子包。运行前检查代码、数据和已有验证结果是否一致，验证范围须覆盖评估区间；检查失败时停止，不自动运行 Validate。
+- `--factor-package <name>`：评估因子包。运行前读取已有验证结果，验证范围须覆盖评估区间。代码和数据身份由 Calculate 维护。
 - `--factor-data <directory> --factor-column <column>`：直接读取评分目录中的日度 Parquet。数据须含 `date, code` 和指定的评分列，不需要因子名称、源码包或验证记录。
 - `--all-alpha`：评估已注册的全部非 Barra alpha 因子包。
 
@@ -29,7 +29,9 @@ description: 评估因子包或已有评分数据，计算 IC、组合收益和�
 | `negative` | 低分为多头。 |
 | `auto` | 按训练期原始 IC 均值定方向：大于零取高分，否则取低分；缺少有效训练期 IC 时报错。 |
 
-方向对全部处理方式生效，写入评估配置；测试期不参与定方向。修改方向后重新计算，不只重画图。
+方向对全部处理方式生效，写入评估配置。测试期不参与定方向。修改方向后重新计算。
+
+`--missing-signal` 控制计划调仓日没有有效因子值时的处理方式。默认 `hold`，保留原持仓和现金，按行情更新净值。`liquidate` 在计划调仓日平仓并计入卖出成本，下次有信号时从现金建仓。续算使用已经保存的设置。
 
 `--task` 选择计算内容，可重复传入，省略时计算全部三项：
 
@@ -64,9 +66,10 @@ uv run --locked python "<path-to-skill>/scripts/run_evaluate.py" --factor-data a
 
 ## 注意事项
 
-- 日期须满足 `begin <= train_end < validation_end < end`。收益未能在对应区间内实现的记录不参与统计，不填零。
-- 直接评分的结果保存到 `<output-dir>/<column>/`，默认目录为 `$ARTIFACTS/factor_evaluation`；不同实验分别指定 `--output-dir`。因子包默认保存到 `$ARTIFACTS/factor_zoo/<name>/<column>/`。文件说明见[评估产物](references/evaluation-artifacts.md)。单项计算只更新自己的 CSV；三项的日期、参数和数据一致才标为 `complete`，否则为 `partial`，不能完整验收或绘图。
-- `--refresh` 仅用于单个因子包，沿用已有设置刷新全部声明列，不能与 `--task`、`--factor-column` 或 `--rebuild` 混用。需要按当前参数重新计算时用 `--rebuild`。
+- 日期须满足 `begin <= train_end < validation_end < end`。训练定向和验证选参只使用各自区间内发出信号、且在截止日前已退出的收益。组合跨区间连续运行。
+- 独立评估的信号日受因子数据覆盖范围限制。显式指定 `--end` 时，退出日可以使用该日期前已入库的行情，包括因子最后一日之后的行情。
+- 直接评分的结果保存到 `<output-dir>/<column>/`，默认目录为 `$ARTIFACTS/factor_evaluation`。因子包默认保存到 `$ARTIFACTS/factor_zoo/<name>/<column>/`。完整评估一起提交三份 CSV 和配置。单项任务可补齐同一数据和参数下的结果，不能覆盖因子包默认目录里的完整结果。文件说明见[评估产物](references/evaluation-artifacts.md)。
+- `--refresh` 用于单个因子包，沿用已有设置刷新全部声明列。日更从各 CSV 的最后一个结果日续算。升级旧产物时，单独运行 `--refresh --rebuild`，按该包各列原有设置重建。旧配置采用默认的 `hold`。
 - 直接评分不能使用 `readme` 或 `--refresh`。是否采用或发布因子由用户判断。
 - `--factor-data` 的相对路径以 `--project-root` 为基准。评估只读取评分目录；单独检查或绘图时沿用相同输入和输出目录。
 
@@ -76,6 +79,6 @@ uv run --locked python "<path-to-skill>/scripts/run_evaluate.py" --factor-data a
 
 - 代码、数据或验证记录不一致：核对包名与目录；按原因重新 Calculate 或 Validate 后再评估。
 - 日期不足或缺少输入：检查行情、行业、参考因子及评估区间，行情需覆盖收益退出日。
-- 结果为 `partial`、文件缺失或数据已变化：统一参数和区间，补算所缺任务，必要时用 `--rebuild` 重算。
+- 结果缺失、文件损坏或计算口径变化：根据报错恢复结果，或用 `--rebuild` 重建。日更会报告原因。
 - 内存或临时空间不足：降低 `--workers`、`--threads` 或批次大小，检查临时目录空间。
 - 绘图或 README 更新失败：先用 `--operation check` 检查结果，再核对绘图依赖、总览图、README 模板标记和文件写入权限。

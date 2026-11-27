@@ -43,28 +43,47 @@ from factor_protocol.readme import update_acceptance
 @contextmanager
 def _writer_lock(path: Path) -> Iterator[None]:
     path.parent.mkdir(parents=True, exist_ok=True)
-    with path.open("a+b") as stream:
-        stream.seek(0)
-        if os.name == "nt":
-            import msvcrt
+    if os.name == "nt":
+        import ctypes
+        from ctypes import wintypes
 
-            if not stream.read(1):
-                stream.write(b"0")
-                stream.flush()
-            stream.seek(0)
-            msvcrt.locking(stream.fileno(), msvcrt.LK_NBLCK, 1)
-        else:
-            import fcntl
-
-            fcntl.flock(stream, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+        create_file = kernel32.CreateFileW
+        create_file.argtypes = (
+            wintypes.LPCWSTR, wintypes.DWORD, wintypes.DWORD, wintypes.LPVOID,
+            wintypes.DWORD, wintypes.DWORD, wintypes.HANDLE,
+        )
+        create_file.restype = wintypes.HANDLE
+        close_handle = kernel32.CloseHandle
+        close_handle.argtypes = (wintypes.HANDLE,)
+        close_handle.restype = wintypes.BOOL
+        read_write_delete = 0xC0010000
+        open_always = 4
+        delete_on_close = 0x04000000
+        handle = create_file(str(path), read_write_delete, 0, None, open_always, delete_on_close, None)
+        if handle == wintypes.HANDLE(-1).value:
+            raise ctypes.WinError(ctypes.get_last_error())
         try:
             yield
         finally:
-            if os.name == "nt":
-                stream.seek(0)
-                msvcrt.locking(stream.fileno(), msvcrt.LK_UNLCK, 1)
-            else:
-                fcntl.flock(stream, fcntl.LOCK_UN)
+            close_handle(handle)
+        return
+
+    import fcntl
+
+    with path.open("a+b") as stream:
+        fcntl.flock(stream, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        # A contender may already have opened the inode we just unlinked.
+        try:
+            current = path.stat()
+        except FileNotFoundError as exc:
+            raise BlockingIOError(f"writer lock was replaced: {path}") from exc
+        if not os.path.samestat(os.fstat(stream.fileno()), current):
+            raise BlockingIOError(f"writer lock was replaced: {path}")
+        try:
+            yield
+        finally:
+            path.unlink()
 
 
 def _link_or_copy(source: str, target: str) -> str:

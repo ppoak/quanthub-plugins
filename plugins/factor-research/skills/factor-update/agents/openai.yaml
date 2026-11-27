@@ -1,4 +1,4 @@
 interface:
   display_name: "Factor Update"
-  short_description: "Incrementally refresh active factors"
-  default_prompt: "Use $factor-update to incrementally refresh active factors from the project's available data and update validation, evaluation, and research records."
+  short_description: "Incrementally refresh a package or schema block"
+  default_prompt: "Use $factor-update to incrementally refresh a factor package or configured schema block from the project's available data and update validation, evaluation, and research records."

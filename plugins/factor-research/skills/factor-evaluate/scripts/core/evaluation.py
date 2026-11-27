@@ -14,10 +14,11 @@ from .engine import (
     EvaluationConfig,
 )
 from .package import refresh_evaluations, run_package_evaluation as run_evaluation
-from factor_protocol import resolve_data_root, resolve_factor_zoo_root
+from factor_protocol import resolve_factor_zoo_root
 from factor_protocol.artifacts import resolve_output_root
 from factor_protocol.readme import update_acceptance
 from .validation import check_package_evaluation as check_evaluation_config
+from .check import check_evaluation_config as check_metrics
 from factor_protocol.loader import (
     load_module_from_path,
     resolve_factor_package,
@@ -28,7 +29,6 @@ from .readme import IncompleteEvaluationArtifacts, update_factor_readme
 
 
 from .engine import run_evaluation as run_data_evaluation
-from .check import check_evaluation_config as check_data_evaluation
 
 @dataclass(frozen=True)
 class _EvaluationTask:
@@ -61,6 +61,7 @@ def _config_from_args(
         storage_factor_name=args.storage_factor_name,
         factor_data=args.factor_data,
         direction=args.direction,
+        missing_signal=args.missing_signal,
         begin=args.begin,
         train_end=args.train_end,
         validation_end=args.validation_end,
@@ -185,13 +186,12 @@ def _write_factor_readmes(
                 factor_name=factor_name,
                 columns=columns,
                 project_root=project_root,
-                data_root=args.data_root,
                 failures=failures,
             )
         except IncompleteEvaluationArtifacts as exc:
             update_factor_readme(
                 readme_path=readme_path, output_root=output_root, factor_name=factor_name,
-                columns=columns, project_root=project_root, data_root=args.data_root,
+                columns=columns, project_root=project_root,
                 failures={column: str(exc) for column in columns},
             )
             print(f"README writeback failed for {factor_name}: {exc}", flush=True)
@@ -495,7 +495,9 @@ def run(args: Namespace, *, project_root: str | Path) -> int:
                 storage_factor_name=args.storage_factor_name, data_root=args.data_root,
                 output_root=args.output_dir, factor_zoo_root=args.factor_zoo_root,
                 threads=args.threads, memory_limit=args.memory_limit,
-                temp_directory=args.temp_directory, end=args.end, settings=args.settings)
+                temp_directory=args.temp_directory, end=args.end, settings=args.settings,
+                daily_parameters=getattr(args, "daily_parameters", None),
+                rebuild=args.rebuild)
             result = 0
         elif args.workers == 1:
             result = _run_sequential(args, factor_names=names, project_root=root)
@@ -510,12 +512,12 @@ def run(args: Namespace, *, project_root: str | Path) -> int:
         directory = output / name if name is not None else output
         if operations & {"check", "plot", "readme"}:
             # Selecting package input always selects its prerequisite contract.
-            checker = check_data_evaluation if args.factor_data else check_evaluation_config
+            daily_update = getattr(args, "daily_update", False)
+            checker = check_metrics if daily_update or args.factor_data else check_evaluation_config
             for column in columns:
                 options = {"factor_data": args.factor_data} if args.factor_data else {}
                 checker(directory / column, factor_name=name,
-                    factor_source=args.storage_factor_name or name, project_root=root,
-                    data_root=resolve_data_root(project_root=root, data_root=args.data_root), **options)
+                    factor_source=args.storage_factor_name or name, project_root=root, **options)
                 if "plot" in operations:
                     from .visualize import render
                     render(project_root=root, factor_name=name, factor_column=column, output_dir=output)
