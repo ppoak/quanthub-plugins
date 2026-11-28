@@ -32,9 +32,13 @@ uv add -r "<path-to-skill>/requirements/backup.txt"
 - EastMoney 个股情绪与盘中异动：[EastMoney 采集说明](references/eastmoney.md)
 - Hugging Face Storage Bucket 备份与恢复：[备份说明](references/huggingface.md)
 
-## 一次性运行入口
+## 代码分工
 
-`scripts/` 根目录只放部署机直接调用的一次性入口。采集、认证、写入和备份的实现按数据源放在各自的子目录，公共配置放在 `scripts/common/`。RiceQuant 研究服务器上的导出脚本仍在 `scripts/ricequant/`，不作为部署机入口。
+- **任务脚本（`scripts/` 根目录）**：定义任务参数、选取采集范围、组织请求、清洗成目标表，并决定分区和更新策略。
+- **数据源子目录**：提供可复用的来源能力，不放完整的部署机任务。例如，东财两项任务共用客户端、请求身份和代理配置；雪球任务共用账号、请求客户端及验号能力。RiceQuant 的研究服务器端导出仍在 `scripts/ricequant/client.py`，不作为部署机入口。
+- **`scripts/common/`**：提供项目配置、证券代码与 `quotes_day` 股票池读取、Parquet 存储操作，不依赖任何数据源或任务脚本。以东财为例，两项任务共用分区写入机制，各自在任务脚本中定义主键及合并规则。
+
+## 一次性运行入口
 
 从目标项目根目录使用项目 Python 运行下表任一脚本。例如：
 

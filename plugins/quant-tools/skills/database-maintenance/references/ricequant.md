@@ -5,7 +5,8 @@
 | 文件 | 用途 |
 | --- | --- |
 | `scripts/ricequant/client.py` | 在 RiceQuant 研究服务器调用 `rqdatac`，导出 Parquet 数据集并打包为 `data.tar.gz`。 |
-| `scripts/ricequant/fetch_ricequant.py` | 通过 Selenium 运行服务器 notebook，下载并解包数据，规范化后 upsert 到本地 Hive 分区 Parquet。 |
+| `scripts/ricequant/notebook.py` | 封装研究服务器登录、运行 notebook 与下载产物。 |
+| `scripts/fetch_ricequant.py` | 指定要运行的 notebook 和归档，解包并按目标表和主键入库。 |
 
 
 ## 环境配置
@@ -58,7 +59,7 @@ uv run --locked python "<path-to-skill>/scripts/fetch_ricequant.py"
 导入已下载的数据包：
 
 ```shell
-uv run --locked python -c "import sys; sys.path.insert(0, '<path-to-skill>/scripts'); from ricequant.fetch_ricequant import dump_data; dump_data('downloads/data.tar.gz', 'data')"
+uv run --locked python -c "import sys; sys.path.insert(0, '<path-to-skill>/scripts'); from fetch_ricequant import dump_data; dump_data('downloads/data.tar.gz', 'data')"
 ```
 
 

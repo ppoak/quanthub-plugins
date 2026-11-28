@@ -1,1 +1,1 @@
-"""Shared project settings for database maintenance commands."""
+"""Shared project, universe, and storage utilities for data maintenance."""

@@ -1,12 +1,12 @@
 # EastMoney 数据采集
 
-## 实现模块
+## 任务与共享客户端
 
 | 文件 | 用途 |
 | --- | --- |
-| `scripts/eastmoney/client.py` | 读取 `.env`、规范股票代码、加载证券范围并请求个股情绪和盘中异动接口。 |
-| `scripts/eastmoney/fetch_eastmoney_stock_sentiment.py` | 清洗个股情绪数据，按 `(code, date)` 写入 Hive 分区 Parquet。 |
-| `scripts/eastmoney/fetch_eastmoney_intraday_changes.py` | 清洗盘中异动事件，按 `(code, date, event_time, change_type, source_rank)` 写入 Hive 分区 Parquet。 |
+| `scripts/eastmoney/client.py` | 两项任务共用的客户端：处理来源身份、请求头、代理、超时与重试。 |
+| `scripts/fetch_eastmoney_stock_sentiment.py` | 选取股票池并合并情绪接口数据，按 `(code, date)` 写入 Hive 分区 Parquet。 |
+| `scripts/fetch_eastmoney_intraday_changes.py` | 分页采集盘中异动，按 `(code, date, event_time, change_type, source_rank)` 写入 Hive 分区 Parquet。 |
 
 
 ## 身份与请求配置

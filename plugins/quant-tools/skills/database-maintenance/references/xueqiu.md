@@ -1,15 +1,16 @@
 # 雪球数据采集
 
-## 实现模块
+## 任务与共享模块
 
 | 文件 | 用途 |
 | --- | --- |
-| `scripts/xueqiu/client.py` | 读取凭据、规范证券代码、按账号选择 HTTP 代理、调用雪球 API，并处理 token 失效通知。 |
-| `scripts/xueqiu/fetch_xueqiu_social_count.py` | 采集股票关注数与讨论数并写入日分区。 |
-| `scripts/xueqiu/fetch_xueqiu_hot_rank.py` | 采集热榜结果并写入日分区。 |
-| `scripts/xueqiu/fetch_xueqiu_status.py` | 采集雪球状态评论并写入日分区。 |
-| `scripts/xueqiu/fetch_xueqiu_cube_rebalance.py` | 采集组合调仓买卖次数并写入日分区。 |
-| `scripts/xueqiu/email_relogin.py` | 实时核对账号身份，按需通过邮件二维码重登录，并按账号键更新项目配置文件中的 Token。 |
+| `scripts/xueqiu/client.py` | 采集任务共用的账号选择、代理、请求客户端及 Token 失效通知。 |
+| `scripts/xueqiu/accounts.py`、`scripts/xueqiu/login.py` | 账号读取和 Token 写回、账号身份验证与浏览器二维码操作。 |
+| `scripts/fetch_xueqiu_social_count.py` | 采集股票关注数与讨论数并写入日分区。 |
+| `scripts/fetch_xueqiu_hot_rank.py` | 采集热榜结果并写入日分区。 |
+| `scripts/fetch_xueqiu_status.py` | 构建候选股票池，采集雪球状态评论并写入日分区。 |
+| `scripts/fetch_xueqiu_cube_rebalance.py` | 采集组合调仓买卖次数并写入日分区。 |
+| `scripts/xueqiu_relogin.py` | 执行验号、邮件二维码续登与结果汇报流程。 |
 
 
 ## 访问配置

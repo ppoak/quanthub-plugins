@@ -1,4 +1,172 @@
-from xueqiu.fetch_xueqiu_hot_rank import main
+from __future__ import annotations
+
+import argparse
+import os
+from dataclasses import dataclass
+from datetime import datetime, timezone
+from pathlib import Path
+
+import pandas as pd
+
+from common.parquet import write_date_snapshot
+from common.project import configure_project, configured_data_root, parse_dated_args
+from common.universe import normalize_code
+
+from xueqiu.client import (
+    XueqiuClient,
+    add_xueqiu_auth_args,
+    create_runtime,
+    optional_int,
+    optional_int_from_float,
+)
+
+
+
+
+RANK_TYPE_LABELS = {
+    12: "a_share_1h_heat",
+    22: "a_share_24h_heat",
+}
+
+
+@dataclass(frozen=True)
+class XueqiuHotRankRow:
+    code: str
+    date: str
+    rank_type: int
+    rank_type_label: str
+    source_rank: int
+    value: int | None
+    value_increment: int | None
+    rank_change: int | None
+    ingested_at: str
+
+
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description="Fetch Xueqiu hot-rank data into Hive-partitioned parquet.")
+    parser.add_argument("--project-root", default=".", help="Target project directory.")
+    parser.add_argument("--date", help="Date (YYYY-MM-DD or YYYYMMDD). Defaults to today in the business timezone.")
+    parser.add_argument("--data-root", default=configured_data_root("XUEQIU_DATA_ROOT"), help="Data root directory.")
+    parser.add_argument("--table-name", default=os.getenv("XUEQIU_HOT_RANK_TABLE", "xueqiu_hot_rank"), help="Output table name.")
+    add_xueqiu_auth_args(parser)
+    parser.add_argument("--timeout", type=float, default=os.getenv("XUEQIU_HOT_RANK_TIMEOUT", os.getenv("XUEQIU_SOCIAL_TIMEOUT", "20")), help="HTTP timeout seconds.")
+    parser.add_argument("--retries", type=int, default=os.getenv("XUEQIU_HOT_RANK_RETRIES", os.getenv("XUEQIU_SOCIAL_RETRIES", "1")), help="Retries per endpoint.")
+    parser.add_argument("--hot-size", type=int, default=100, help="Hot stock list size. Xueqiu currently caps it at 100.")
+    parser.add_argument("--hot-rank-types", nargs="*", type=int, help="Xueqiu hot stock list type values.")
+    args = parse_dated_args(parser)
+    if args.hot_rank_types is None:
+        values = os.getenv("XUEQIU_HOT_RANK_TYPES", "12 22").replace(",", " ").split()
+        args.hot_rank_types = [int(value) for value in values]
+    return args
+
+
+def fetch_hot_rank(
+    *,
+    client: XueqiuClient,
+    trade_date: str,
+    rank_types: list[int],
+    hot_size: int,
+) -> pd.DataFrame:
+    rows: list[XueqiuHotRankRow] = []
+    for rank_type in rank_types:
+        items = client.get_hot_stock_items(rank_type=rank_type, size=hot_size)
+        print(f"hot_rank rank_type={rank_type} rows={len(items)}")
+        ingested_at = datetime.now(timezone.utc).replace(microsecond=0).isoformat()
+        for source_rank, item in enumerate(items, start=1):
+            symbol = item.get("symbol")
+            if symbol is None:
+                continue
+            try:
+                code = normalize_code(str(symbol))
+            except ValueError:
+                continue
+            if not code.endswith((".SH", ".SZ", ".BJ")):
+                continue
+            rows.append(
+                XueqiuHotRankRow(
+                    code=code,
+                    date=trade_date,
+                    rank_type=rank_type,
+                    rank_type_label=RANK_TYPE_LABELS.get(rank_type, f"type_{rank_type}"),
+                    source_rank=source_rank,
+                    value=optional_int_from_float(item.get("value")),
+                    value_increment=optional_int_from_float(item.get("increment")),
+                    rank_change=optional_int(item.get("rank_change")),
+                    ingested_at=ingested_at,
+                )
+            )
+    columns = [
+        "code",
+        "date",
+        "rank_type",
+        "rank_type_label",
+        "source_rank",
+        "value",
+        "value_increment",
+        "rank_change",
+        "ingested_at",
+    ]
+    if not rows:
+        return pd.DataFrame(columns=columns)
+    df = pd.DataFrame([row.__dict__ for row in rows])
+    df["date"] = pd.to_datetime(df["date"]).dt.date
+    for column in ("rank_type", "source_rank", "value", "value_increment", "rank_change"):
+        df[column] = pd.to_numeric(df[column], errors="coerce").astype("Int64")
+    df["ingested_at"] = pd.to_datetime(df["ingested_at"], utc=True)
+    return df[columns].sort_values(["date", "rank_type", "source_rank", "code"]).reset_index(drop=True)
+
+
+def main() -> str:
+    configure_project()
+    args = parse_args()
+    target_date = pd.to_datetime(args.date).date().isoformat()
+    data_root = Path(args.data_root)
+    accounts, proxy, notifier = create_runtime(account_id=args.account, proxy=args.proxy)
+    print(f"fetch_start table={args.table_name} date={target_date} rank_types={args.hot_rank_types}")
+
+    client = XueqiuClient(
+        accounts,
+        host="stock.xueqiu.com",
+        proxy=proxy,
+        notifier=notifier,
+        device_id=None,
+        timeout=args.timeout,
+        retries=args.retries,
+    )
+    df = fetch_hot_rank(
+        client=client,
+        trade_date=target_date,
+        rank_types=args.hot_rank_types,
+        hot_size=args.hot_size,
+    )
+    if df.empty:
+        summary = f"date={target_date}; table={args.table_name}; rows=0"
+
+        print(f"write_skipped table={args.table_name} rows=0")
+        print(summary)
+        return summary
+
+    output_path = write_date_snapshot(
+        df,
+        data_root,
+        args.table_name,
+        [
+            "code",
+            "date",
+            "rank_type",
+            "rank_type_label",
+            "source_rank",
+            "value",
+            "value_increment",
+            "rank_change",
+            "ingested_at",
+        ],
+    )
+    summary = f"date={target_date}; table={args.table_name}; rows={len(df)}"
+
+    print(f"write_done table={args.table_name} path={output_path.as_posix()} rows={len(df)}")
+    print(summary)
+    return summary
 
 
 if __name__ == "__main__":

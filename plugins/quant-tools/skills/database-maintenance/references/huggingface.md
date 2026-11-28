@@ -4,11 +4,12 @@
 
 将允许名单内的本地数据库 Parquet 表同步到由 `HUGGINGFACE_BUCKET_ID` 指定的私有 Storage Bucket，用于异机备份与恢复。生产备份使用 Storage Bucket 的对象同步能力。
 
-## 实现模块
+## 任务与同步模块
 
 | 文件 | 用途 |
 | --- | --- |
-| `scripts/huggingface/sync_huggingface_bucket.py` | 按表白名单生成同步目标，并通过 `hf buckets sync` 执行带重试的同步。 |
+| `scripts/sync_huggingface_bucket.py` | 定义备份白名单与分区范围，生成同步目标。 |
+| `scripts/huggingface/bucket.py` | 生成 Bucket URI，并通过 `hf buckets sync` 执行带重试的同步。 |
 
 
 ## 同步范围

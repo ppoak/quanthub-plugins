@@ -14,10 +14,9 @@ import urllib.parse
 import urllib.request
 from datetime import datetime, timezone
 from email.message import EmailMessage
-from pathlib import Path
 from typing import Any
 
-import duckdb
+from common.universe import normalize_code
 
 from .accounts import XueqiuAccount, load_accounts, parse_proxy_url
 
@@ -62,18 +61,6 @@ def send_email(
         smtp.send_message(message)
 
 
-def load_dotenv(path: str | Path = ".env") -> None:
-    env_path = Path(path)
-    if not env_path.exists():
-        return
-    for raw_line in env_path.read_text(encoding="utf-8").splitlines():
-        line = raw_line.strip()
-        if not line or line.startswith("#") or "=" not in line:
-            continue
-        key, value = line.split("=", 1)
-        os.environ.setdefault(key.strip(), value.strip().strip('"').strip("'"))
-
-
 def optional_int(value: Any) -> int | None:
     if value is None:
         return None
@@ -104,78 +91,11 @@ def mask_token(token: str) -> str:
 
 
 def to_xueqiu_symbol(code: str) -> str:
-    raw = code.strip().upper()
-    if "." in raw:
-        ticker, exchange = raw.split(".", 1)
-        return f"{exchange}{ticker}"
-    if raw.startswith(("SH", "SZ", "BJ")):
-        return raw
-    if raw.startswith(("5", "6", "9")):
-        return f"SH{raw}"
-    if raw.startswith(("0", "1", "2", "3")):
-        return f"SZ{raw}"
-    if raw.startswith(("4", "8")):
-        return f"BJ{raw}"
-    raise ValueError(f"Cannot infer Xueqiu symbol from code: {code}")
-
-
-def normalize_code(code: str) -> str:
-    raw = code.strip().upper()
-    if "." in raw:
-        ticker, exchange = raw.split(".", 1)
-        return f"{ticker}.{exchange}"
-    if raw.startswith(("SH", "SZ", "BJ")):
-        return f"{raw[2:]}.{raw[:2]}"
-    if raw.startswith(("5", "6", "9")):
-        return f"{raw}.SH"
-    if raw.startswith(("0", "1", "2", "3")):
-        return f"{raw}.SZ"
-    if raw.startswith(("4", "8")):
-        return f"{raw}.BJ"
-    raise ValueError(f"Cannot infer normalized code from code: {code}")
-
-
-def latest_quotes_day_partition(data_root: Path, trade_date: str) -> tuple[str, Path]:
-    quotes_root = data_root / "quotes_day"
-    if not quotes_root.exists():
-        raise ValueError(f"quotes_day table does not exist: {quotes_root.as_posix()}")
-
-    target_date = datetime.fromisoformat(trade_date).date()
-    candidates: list[tuple[datetime.date, Path]] = []
-    for path in quotes_root.glob("date=*"):
-        if not path.is_dir():
-            continue
-        try:
-            partition_date = datetime.fromisoformat(path.name.split("=", 1)[1]).date()
-        except ValueError:
-            continue
-        if partition_date <= target_date and any(path.glob("*.parquet")):
-            candidates.append((partition_date, path))
-
-    if not candidates:
-        raise ValueError(f"No quotes_day universe available on or before {trade_date}")
-    partition_date, partition_path = max(candidates, key=lambda item: item[0])
-    return partition_date.isoformat(), partition_path
-
-
-def load_codes_from_quotes_day(data_root: Path, trade_date: str) -> list[str]:
-    universe_date, partition_path = latest_quotes_day_partition(data_root, trade_date)
-    quotes_glob = (partition_path / "*.parquet").as_posix()
-    con = duckdb.connect(database=":memory:")
     try:
-        print(f"universe_date={universe_date}")
-        rows = con.execute(
-            """
-            SELECT DISTINCT code
-            FROM parquet_scan(?, union_by_name=1)
-            WHERE code IS NOT NULL
-            ORDER BY code
-            """,
-            [quotes_glob],
-        ).fetchall()
-    finally:
-        con.close()
-    return [str(row[0]) for row in rows]
+        ticker, exchange = normalize_code(code).split(".", 1)
+    except ValueError as exc:
+        raise ValueError(f"Cannot infer Xueqiu symbol from code: {code}") from exc
+    return f"{exchange}{ticker}"
 
 
 class TokenInvalidError(RuntimeError):
@@ -399,16 +319,14 @@ def add_xueqiu_auth_args(parser: argparse.ArgumentParser) -> None:
 
 
 def create_runtime(
-    args: argparse.Namespace,
+    *, account_id: str | None = None, proxy: str | None = None,
 ) -> tuple[list[XueqiuAccount], str | None, TokenInvalidNotifier]:
     accounts = load_accounts()
-    selected = getattr(args, "account", None)
-    if selected is not None:
-        if selected not in accounts:
-            raise ValueError(f"Unknown Xueqiu account: {selected}")
-        accounts = {selected: accounts[selected]}
+    if account_id is not None:
+        if account_id not in accounts:
+            raise ValueError(f"Unknown Xueqiu account: {account_id}")
+        accounts = {account_id: accounts[account_id]}
     active = [account for account in accounts.values() if account.token]
     if not active:
         raise ValueError("A registered XUEQIU_ACCOUNT_<ID> with a token is required for collection")
-    proxy = getattr(args, "proxy", None) or os.environ.get("XUEQIU_PROXY")
-    return active, proxy, TokenInvalidNotifier()
+    return active, proxy or os.environ.get("XUEQIU_PROXY"), TokenInvalidNotifier()

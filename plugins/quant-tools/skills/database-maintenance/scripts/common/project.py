@@ -7,7 +7,8 @@ from pathlib import Path
 from zoneinfo import ZoneInfo
 
 
-def load_env_file(path: Path) -> None:
+def load_env_file(path: str | Path) -> None:
+    path = Path(path)
     if not path.exists():
         return
     for raw_line in path.read_text(encoding="utf-8-sig").splitlines():
