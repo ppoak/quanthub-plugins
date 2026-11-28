@@ -1,6 +1,6 @@
 # EastMoney 数据采集
 
-## 脚本分工
+## 实现模块
 
 | 文件 | 用途 |
 | --- | --- |
@@ -58,20 +58,20 @@ EASTMONEY_INTRADAY_CHANGES_SLEEP=0.2
 小范围情绪采集示例：
 
 ```sh
-uv run --locked python "<path-to-skill>/scripts/eastmoney/fetch_eastmoney_stock_sentiment.py" --date 2026-06-03 --codes 600519.SH --data-root data --table-name eastmoney_stock_sentiment_test --workers 1 --sleep 0 --timeout 20 --retries 0
+uv run --locked python "<path-to-skill>/scripts/fetch_eastmoney_stock_sentiment.py" --date 2026-06-03 --codes 600519.SH --data-root data --table-name eastmoney_stock_sentiment_test --workers 1 --sleep 0 --timeout 20 --retries 0
 ```
 
 盘中异动采集示例：
 
 ```sh
-uv run --locked python "<path-to-skill>/scripts/eastmoney/fetch_eastmoney_intraday_changes.py" --date <YYYY-MM-DD> --data-root data --table-name eastmoney_intraday_changes_test --change-types 大笔买入 大笔卖出 --sleep 0 --timeout 20 --retries 0
+uv run --locked python "<path-to-skill>/scripts/fetch_eastmoney_intraday_changes.py" --date <YYYY-MM-DD> --data-root data --table-name eastmoney_intraday_changes_test --change-types 大笔买入 大笔卖出 --sleep 0 --timeout 20 --retries 0
 ```
 
 正式运行时使用生产表名和经过确认的请求范围：
 
 ```sh
-uv run --locked python "<path-to-skill>/scripts/eastmoney/fetch_eastmoney_intraday_changes.py"
-uv run --locked python "<path-to-skill>/scripts/eastmoney/fetch_eastmoney_stock_sentiment.py"
+uv run --locked python "<path-to-skill>/scripts/fetch_eastmoney_intraday_changes.py"
+uv run --locked python "<path-to-skill>/scripts/fetch_eastmoney_stock_sentiment.py"
 ```
 
 ## 故障处理

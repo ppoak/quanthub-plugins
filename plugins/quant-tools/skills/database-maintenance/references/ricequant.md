@@ -52,13 +52,13 @@ RiceQuant 服务器导出带数据集前缀的 Parquet 文件，并组成 `data.
 完整本地更新：
 
 ```shell
-uv run --locked python "<path-to-skill>/scripts/ricequant/fetch_ricequant.py"
+uv run --locked python "<path-to-skill>/scripts/fetch_ricequant.py"
 ```
 
 导入已下载的数据包：
 
 ```shell
-uv run --locked python -c "import runpy; module=runpy.run_path('<path-to-skill>/scripts/ricequant/fetch_ricequant.py'); module['dump_data']('downloads/data.tar.gz', 'data')"
+uv run --locked python -c "import sys; sys.path.insert(0, '<path-to-skill>/scripts'); from ricequant.fetch_ricequant import dump_data; dump_data('downloads/data.tar.gz', 'data')"
 ```
 
 

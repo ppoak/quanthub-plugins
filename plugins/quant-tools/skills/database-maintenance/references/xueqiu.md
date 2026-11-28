@@ -1,6 +1,6 @@
 # 雪球数据采集
 
-## 脚本分工
+## 实现模块
 
 | 文件 | 用途 |
 | --- | --- |
@@ -60,10 +60,10 @@ XUEQIU_RELOGIN_VERIFY_TIMEOUT=20
 ## 小范围采集
 
 ```sh
-uv run --locked python "<path-to-skill>/scripts/xueqiu/fetch_xueqiu_social_count.py" --date 2026-06-02 --codes 002384.SZ --data-root data --table-name xueqiu_social_count_test --workers 1 --sleep 0 --timeout 20 --retries 0
-uv run --locked python "<path-to-skill>/scripts/xueqiu/fetch_xueqiu_hot_rank.py" --date 2026-06-02 --data-root data --table-name xueqiu_hot_rank_test --timeout 20 --retries 0 --hot-size 5 --hot-rank-types 12
-uv run --locked python "<path-to-skill>/scripts/xueqiu/fetch_xueqiu_status.py" --date 2026-06-01 --codes 688008.SH --data-root data --table-name xueqiu_status_test --workers 1 --batch-size 1 --count 20 --max-pages 1 --sleep 0 --timeout 20 --retries 0
-uv run --locked python "<path-to-skill>/scripts/xueqiu/fetch_xueqiu_cube_rebalance.py" --date 2026-06-02 --codes 002384.SZ --data-root data --table-name xueqiu_cube_rebalance_test --workers 1 --sleep 0 --timeout 20 --retries 0
+uv run --locked python "<path-to-skill>/scripts/fetch_xueqiu_social_count.py" --date 2026-06-02 --codes 002384.SZ --data-root data --table-name xueqiu_social_count_test --workers 1 --sleep 0 --timeout 20 --retries 0
+uv run --locked python "<path-to-skill>/scripts/fetch_xueqiu_hot_rank.py" --date 2026-06-02 --data-root data --table-name xueqiu_hot_rank_test --timeout 20 --retries 0 --hot-size 5 --hot-rank-types 12
+uv run --locked python "<path-to-skill>/scripts/fetch_xueqiu_status.py" --date 2026-06-01 --codes 688008.SH --data-root data --table-name xueqiu_status_test --workers 1 --batch-size 1 --count 20 --max-pages 1 --sleep 0 --timeout 20 --retries 0
+uv run --locked python "<path-to-skill>/scripts/fetch_xueqiu_cube_rebalance.py" --date 2026-06-02 --codes 002384.SZ --data-root data --table-name xueqiu_cube_rebalance_test --workers 1 --sleep 0 --timeout 20 --retries 0
 ```
 
 验证结束后，清理 `_test` 数据表。
@@ -71,10 +71,10 @@ uv run --locked python "<path-to-skill>/scripts/xueqiu/fetch_xueqiu_cube_rebalan
 ## 正式运行参数
 
 ```sh
-uv run --locked python "<path-to-skill>/scripts/xueqiu/fetch_xueqiu_social_count.py" --date <YYYY-MM-DD> --data-root data --table-name xueqiu_social_count --workers 2 --sleep 0.2 --timeout 30 --retries 2 --failure-retry-rounds 1 --failure-retry-workers 1 --failure-retry-sleep 1.0 --failure-retry-timeout 30 --failure-retry-retries 3
-uv run --locked python "<path-to-skill>/scripts/xueqiu/fetch_xueqiu_hot_rank.py" --date <YYYY-MM-DD> --data-root data --table-name xueqiu_hot_rank --timeout 20 --retries 1 --hot-rank-types 12 22
-uv run --locked python "<path-to-skill>/scripts/xueqiu/fetch_xueqiu_status.py" --date <YYYY-MM-DD> --data-root data --table-name xueqiu_status --workers 1 --batch-size 10 --sleep 2 --timeout 30 --retries 2 --candidate-limit 500
-uv run --locked python "<path-to-skill>/scripts/xueqiu/fetch_xueqiu_cube_rebalance.py" --date <YYYY-MM-DD> --data-root data --table-name xueqiu_cube_rebalance --workers 2 --sleep 0.2 --timeout 20 --retries 1 --failure-retry-rounds 1 --failure-retry-workers 1 --failure-retry-sleep 2.0 --failure-retry-timeout 30 --failure-retry-retries 5
+uv run --locked python "<path-to-skill>/scripts/fetch_xueqiu_social_count.py" --date <YYYY-MM-DD> --data-root data --table-name xueqiu_social_count --workers 2 --sleep 0.2 --timeout 30 --retries 2 --failure-retry-rounds 1 --failure-retry-workers 1 --failure-retry-sleep 1.0 --failure-retry-timeout 30 --failure-retry-retries 3
+uv run --locked python "<path-to-skill>/scripts/fetch_xueqiu_hot_rank.py" --date <YYYY-MM-DD> --data-root data --table-name xueqiu_hot_rank --timeout 20 --retries 1 --hot-rank-types 12 22
+uv run --locked python "<path-to-skill>/scripts/fetch_xueqiu_status.py" --date <YYYY-MM-DD> --data-root data --table-name xueqiu_status --workers 1 --batch-size 10 --sleep 2 --timeout 30 --retries 2 --candidate-limit 500
+uv run --locked python "<path-to-skill>/scripts/fetch_xueqiu_cube_rebalance.py" --date <YYYY-MM-DD> --data-root data --table-name xueqiu_cube_rebalance --workers 2 --sleep 0.2 --timeout 20 --retries 1 --failure-retry-rounds 1 --failure-retry-workers 1 --failure-retry-sleep 2.0 --failure-retry-timeout 30 --failure-retry-retries 5
 ```
 
 状态采集默认使用候选股票范围，候选来源包括热榜、讨论数和组合调仓活跃度。全市场范围通过 `--full-universe` 显式开启，适合经过评估的专项任务。社交计数使用双 worker 首轮采集，失败证券再以单 worker 和较长间隔重试；成功记录先写入，仍有失败时脚本返回失败状态。组合调仓同样先快速采集，再用保守参数重试失败证券，成功记录先 upsert。
@@ -95,7 +95,7 @@ uv run --locked python "<path-to-skill>/scripts/xueqiu/fetch_xueqiu_cube_rebalan
 
 | 文件 | 做什么 |
 | --- | --- |
-| `scripts/xueqiu/email_relogin.py` | 一次性检查全部账号或续登单个账号，按需发送二维码并保存 Token。 |
+| `scripts/xueqiu_relogin.py` | 一次性检查全部账号或续登单个账号，按需发送二维码并保存 Token。 |
 | `.env` | 保存邮箱、手机号和 token。不要提交到 Git。 |
 | `.tmp/database-maintenance/xueqiu-auth/browser` | 保存每个账号的 Chrome 登录状态。不要提交到 Git。 |
 
@@ -126,7 +126,7 @@ XUEQIU_RELOGIN_TIMEOUT=600
 在项目根目录运行：
 
 ```sh
-uv run --locked python "<path-to-skill>/scripts/xueqiu/email_relogin.py" --account 0650 --env-path .env --timeout 600
+uv run --locked python "<path-to-skill>/scripts/xueqiu_relogin.py" --account 0650 --env-path .env --timeout 600
 ```
 
 然后：
@@ -141,7 +141,7 @@ uv run --locked python "<path-to-skill>/scripts/xueqiu/email_relogin.py" --accou
 ### 一次性检查全部账号
 
 ```sh
-uv run --locked python "<path-to-skill>/scripts/xueqiu/email_relogin.py" --check-accounts
+uv run --locked python "<path-to-skill>/scripts/xueqiu_relogin.py" --check-accounts
 ```
 
 单账号续登仍可使用 `--account <ID>` 或已登记的完整手机号。`--timeout` 覆盖 `.env` 中的 `XUEQIU_RELOGIN_TIMEOUT`。

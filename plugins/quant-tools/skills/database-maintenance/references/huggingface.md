@@ -4,7 +4,7 @@
 
 将允许名单内的本地数据库 Parquet 表同步到由 `HUGGINGFACE_BUCKET_ID` 指定的私有 Storage Bucket，用于异机备份与恢复。生产备份使用 Storage Bucket 的对象同步能力。
 
-## 脚本分工
+## 实现模块
 
 | 文件 | 用途 |
 | --- | --- |
@@ -79,13 +79,13 @@ HUGGINGFACE_BACKUP_RETRY_SLEEP_SECONDS=60
 小范围 dry-run（连接 bucket 比对，不执行远端写入）：
 
 ```sh
-uv run --locked python "<path-to-skill>/scripts/huggingface/sync_huggingface_bucket.py" --include-table eastmoney_intraday_changes --dry-run
+uv run --locked python "<path-to-skill>/scripts/sync_huggingface_bucket.py" --include-table eastmoney_intraday_changes --dry-run
 ```
 
 执行完整备份，保留远端额外对象：
 
 ```sh
-uv run --locked python "<path-to-skill>/scripts/huggingface/sync_huggingface_bucket.py" --no-delete-remote-extra
+uv run --locked python "<path-to-skill>/scripts/sync_huggingface_bucket.py" --no-delete-remote-extra
 ```
 
 

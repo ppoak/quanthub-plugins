@@ -4,7 +4,6 @@ import os
 import shutil
 import tarfile
 import time
-import sys
 import uuid
 from pathlib import Path
 
@@ -17,11 +16,7 @@ from selenium.webdriver.chrome.service import Service
 from selenium.webdriver.support import expected_conditions as EC
 from selenium.webdriver.support.ui import WebDriverWait
 
-SKILL_ROOT = Path(__file__).resolve().parents[2]
-if str(SKILL_ROOT) not in sys.path:
-    sys.path.insert(0, str(SKILL_ROOT))
-
-from scripts.common.project import configure_project, configured_data_root
+from common.project import configure_project, configured_data_root
 
 # ---------------------------------------------------------------------------
 # setup_logger
@@ -556,7 +551,3 @@ def main():
     logger.info("RiceQuant fetch started")
     update_ricequant()
     logger.info("RiceQuant fetch finished successfully")
-
-
-if __name__ == "__main__":
-    main()

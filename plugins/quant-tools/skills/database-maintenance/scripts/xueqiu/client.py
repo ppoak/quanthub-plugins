@@ -19,7 +19,7 @@ from typing import Any
 
 import duckdb
 
-from scripts.xueqiu.accounts import XueqiuAccount, load_accounts, parse_proxy_url
+from .accounts import XueqiuAccount, load_accounts, parse_proxy_url
 
 
 AUTH_ERROR_PATTERNS = ("token", "login", "auth", "unauthorized", "登录", "登陆", "过期", "失效")

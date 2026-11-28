@@ -34,25 +34,27 @@ uv add -r "<path-to-skill>/requirements/backup.txt"
 
 ## 一次性运行入口
 
+`scripts/` 根目录只放部署机直接调用的一次性入口。采集、认证、写入和备份的实现按数据源放在各自的子目录，公共配置放在 `scripts/common/`。RiceQuant 研究服务器上的导出脚本仍在 `scripts/ricequant/`，不作为部署机入口。
+
 从目标项目根目录使用项目 Python 运行下表任一脚本。例如：
 
 ```sh
-uv run --locked python "<path-to-skill>/scripts/ricequant/fetch_ricequant.py"
+uv run --locked python "<path-to-skill>/scripts/fetch_ricequant.py"
 ```
 
 也可用虚拟环境中的 Python，传入 `--project-root <project-root>`。脚本从该目录读取 `.env`，相对路径以该目录为基准。命令行参数优先于对应环境变量；EastMoney、雪球采集和备份的数据目录按 `--data-root`、来源专用目录、`DATA`、默认 `data` 的顺序选取。RiceQuant 依次读取 `DATASET_PATH`、`DATA`、默认 `data`。
 
 | 原任务 | 直接执行的脚本及必要参数 |
 | --- | --- |
-| `eastmoney_intraday_changes` | `scripts/eastmoney/fetch_eastmoney_intraday_changes.py` |
-| `eastmoney_stock_sentiment` | `scripts/eastmoney/fetch_eastmoney_stock_sentiment.py` |
-| `ricequant` | `scripts/ricequant/fetch_ricequant.py` |
-| `xueqiu_cube_rebalance` | `scripts/xueqiu/fetch_xueqiu_cube_rebalance.py` |
-| `xueqiu_social_count` | `scripts/xueqiu/fetch_xueqiu_social_count.py` |
-| `xueqiu_hot_rank` | `scripts/xueqiu/fetch_xueqiu_hot_rank.py` |
-| `xueqiu_status` | `scripts/xueqiu/fetch_xueqiu_status.py` |
-| `xueqiu_relogin` | `scripts/xueqiu/email_relogin.py --check-accounts` |
-| `huggingface_backup` | `scripts/huggingface/sync_huggingface_bucket.py` |
+| `eastmoney_intraday_changes` | `scripts/fetch_eastmoney_intraday_changes.py` |
+| `eastmoney_stock_sentiment` | `scripts/fetch_eastmoney_stock_sentiment.py` |
+| `ricequant` | `scripts/fetch_ricequant.py` |
+| `xueqiu_cube_rebalance` | `scripts/fetch_xueqiu_cube_rebalance.py` |
+| `xueqiu_social_count` | `scripts/fetch_xueqiu_social_count.py` |
+| `xueqiu_hot_rank` | `scripts/fetch_xueqiu_hot_rank.py` |
+| `xueqiu_status` | `scripts/fetch_xueqiu_status.py` |
+| `xueqiu_relogin` | `scripts/xueqiu_relogin.py --check-accounts` |
+| `huggingface_backup` | `scripts/sync_huggingface_bucket.py` |
 
 六个 EastMoney 和雪球采集脚本省略 `--date` 时，使用 `DATABASE_MAINTENANCE_TIMEZONE`（默认 `Asia/Shanghai`）下的当天。跨午夜处理上一日数据时，请显式传 `--date YYYY-MM-DD`；该参数不保证实时接口能返回历史快照。
 
@@ -68,7 +70,7 @@ uv run --locked python "<path-to-skill>/scripts/ricequant/fetch_ricequant.py"
 
 ```shell
 uv run --locked python -m compileall "<path-to-skill>/scripts"
-uv run --locked python "<path-to-skill>/scripts/xueqiu/email_relogin.py" --help
+uv run --locked python "<path-to-skill>/scripts/xueqiu_relogin.py" --help
 ```
 
 涉及认证、采集和写入时，按来源参考文档用本地样本或 `_test` 表验证。记录实际执行范围、分区、行数和未验证的外部服务；完成后清理测试表，不提交凭据、数据或下载包。

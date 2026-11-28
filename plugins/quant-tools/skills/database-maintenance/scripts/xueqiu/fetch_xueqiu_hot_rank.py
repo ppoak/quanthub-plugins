@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import argparse
 import os
-import sys
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -11,16 +10,9 @@ import pandas as pd
 import pyarrow as pa
 import pyarrow.parquet as pq
 
+from common.project import configure_project, configured_data_root, parse_dated_args
 
-
-
-SKILL_ROOT = Path(__file__).resolve().parents[2]
-if str(SKILL_ROOT) not in sys.path:
-    sys.path.insert(0, str(SKILL_ROOT))
-
-from scripts.common.project import configure_project, configured_data_root, parse_dated_args
-
-from scripts.xueqiu.client import (
+from .client import (
     XueqiuClient,
     add_xueqiu_auth_args,
     create_runtime,
@@ -192,7 +184,3 @@ def main() -> str:
     print(f"write_done table={args.table_name} path={output_path.as_posix()} rows={len(df)}")
     print(summary)
     return summary
-
-
-if __name__ == "__main__":
-    main()

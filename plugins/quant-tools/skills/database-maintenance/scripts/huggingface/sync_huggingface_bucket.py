@@ -1,19 +1,15 @@
 from __future__ import annotations
-import sys
 
 import argparse
 import datetime as dt
 import os
 import subprocess
+import sys
 import time
 from dataclasses import dataclass
 from pathlib import Path
 
-SKILL_ROOT = Path(__file__).resolve().parents[2]
-if str(SKILL_ROOT) not in sys.path:
-    sys.path.insert(0, str(SKILL_ROOT))
-
-from scripts.common.project import configure_project, configured_data_root
+from common.project import configure_project, configured_data_root
 
 
 @dataclass(frozen=True)
@@ -178,7 +174,3 @@ def main() -> None:
             max_retries=args.max_retries,
             retry_sleep_seconds=args.retry_sleep_seconds,
         )
-
-
-if __name__ == "__main__":
-    main()

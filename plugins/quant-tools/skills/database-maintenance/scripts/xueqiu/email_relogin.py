@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import argparse
 import ssl
-import sys
 import imaplib
 import os
 import re
@@ -26,13 +25,10 @@ from pathlib import Path
 from typing import Callable
 
 
-SKILL_ROOT = Path(__file__).resolve().parents[2]
-if str(SKILL_ROOT) not in sys.path:
-    sys.path.insert(0, str(SKILL_ROOT))
+from common.project import load_env_file
 
-from scripts.common.project import load_env_file
-from scripts.xueqiu.accounts import XueqiuAccount, load_accounts, parse_proxy_url, replace_account_token
-from scripts.xueqiu.client import DEFAULT_USER_AGENT, build_xueqiu_opener
+from .accounts import XueqiuAccount, load_accounts, parse_proxy_url, replace_account_token
+from .client import DEFAULT_USER_AGENT, build_xueqiu_opener
 
 
 AUTH_ROOT = Path(".tmp/database-maintenance/xueqiu-auth")
@@ -690,7 +686,3 @@ def main(argv: list[str] | None = None) -> int:
         print(f"Xueqiu relogin failed: {exc}")
         return 1
     return 0 if username else 1
-
-
-if __name__ == "__main__":
-    raise SystemExit(main())
