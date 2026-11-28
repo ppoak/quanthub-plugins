@@ -13,7 +13,7 @@ SKILL_ROOT = Path(__file__).resolve().parents[2]
 if str(SKILL_ROOT) not in sys.path:
     sys.path.insert(0, str(SKILL_ROOT))
 
-from scripts.common.scheduler import configure_project, configured_data_root, record_task_output
+from scripts.common.project import configure_project, configured_data_root
 
 
 @dataclass(frozen=True)
@@ -52,7 +52,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--quotes-min-start-date", default=os.getenv("HUGGINGFACE_BACKUP_QUOTES_MIN_START_DATE", "2015-01-01"))
     parser.add_argument("--token-env", default=os.getenv("HUGGINGFACE_TOKEN_ENV", "HUGGINGFACE_TOKEN"))
     parser.add_argument("--include-table", action="append", choices=ALL_TABLES)
-    parser.add_argument("--delete-remote-extra", action="store_true")
+    parser.add_argument(
+        "--delete-remote-extra", action=argparse.BooleanOptionalAction,
+        default=os.getenv("HUGGINGFACE_BACKUP_DELETE_REMOTE_EXTRA", "0").strip().lower() in {"1", "true", "yes", "on"},
+        help="Delete extra remote objects. Defaults to off unless enabled in project settings.",
+    )
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--max-retries", type=int, default=int(os.getenv("HUGGINGFACE_BACKUP_MAX_RETRIES", "5")))
     parser.add_argument("--retry-sleep-seconds", type=float, default=float(os.getenv("HUGGINGFACE_BACKUP_RETRY_SLEEP_SECONDS", "60")))
@@ -132,8 +136,6 @@ def run_sync_target(target: SyncTarget, *, token: str, dry_run: bool, delete_rem
         process = subprocess.run(command, text=True)
         if process.returncode == 0:
             finished_at = dt.datetime.now(dt.timezone.utc).replace(microsecond=0).isoformat()
-            if not dry_run:
-                record_task_output(target.name, target.destination, None, "remote backup sync")
             print(f"SYNC_DONE name={target.name} attempt={attempt} finished_at_utc={finished_at}")
             return
         print(f"SYNC_FAIL name={target.name} attempt={attempt} return_code={process.returncode}")

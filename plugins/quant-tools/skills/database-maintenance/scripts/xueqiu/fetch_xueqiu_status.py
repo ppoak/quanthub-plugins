@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import os
 import html
 import re
 import random
@@ -26,7 +27,7 @@ SKILL_ROOT = Path(__file__).resolve().parents[2]
 if str(SKILL_ROOT) not in sys.path:
     sys.path.insert(0, str(SKILL_ROOT))
 
-from scripts.common.scheduler import configure_project, configured_data_root, record_task_output
+from scripts.common.project import configure_project, configured_data_root, parse_dated_args
 
 from scripts.xueqiu.accounts import XueqiuAccount
 from scripts.xueqiu.client import (
@@ -357,32 +358,32 @@ def parse_args() -> argparse.Namespace:
         description="Fetch Xueqiu per-status comments for a trade date into Hive-partitioned parquet."
     )
     parser.add_argument("--project-root", default=".", help="Target project directory.")
-    parser.add_argument("--date", required=True, help="Trade date, format YYYY-MM-DD or YYYYMMDD.")
+    parser.add_argument("--date", help="Trade date (YYYY-MM-DD or YYYYMMDD). Defaults to today in the business timezone.")
     parser.add_argument("--data-root", default=configured_data_root("XUEQIU_DATA_ROOT"), help="Data root directory.")
-    parser.add_argument("--table-name", default="xueqiu_status", help="Output table name under data root.")
+    parser.add_argument("--table-name", default=os.getenv("XUEQIU_STATUS_TABLE", "xueqiu_status"), help="Output table name under data root.")
     add_xueqiu_auth_args(parser)
     parser.add_argument("--codes", nargs="*", default=None, help="Optional code list, e.g. 688008.SH SZ002384.")
     parser.add_argument("--limit", type=int, default=None, help="Optional limit for smoke tests.")
     parser.add_argument("--full-universe", action="store_true", help="Fetch all stocks from quotes_day instead of candidate mode.")
-    parser.add_argument("--candidate-limit", type=int, default=500, help="Maximum stocks to fetch in candidate mode.")
-    parser.add_argument("--candidate-social-limit", type=int, default=300, help="Top discussions stocks from xueqiu_social_count.")
-    parser.add_argument("--candidate-hot-limit", type=int, default=300, help="Hot-rank stocks from xueqiu_hot_rank.")
-    parser.add_argument("--candidate-cube-limit", type=int, default=200, help="Top cube-rebalance stocks from latest available xueqiu_cube_rebalance date.")
+    parser.add_argument("--candidate-limit", type=int, default=os.getenv("XUEQIU_STATUS_CANDIDATE_LIMIT", "200"), help="Maximum stocks to fetch in candidate mode.")
+    parser.add_argument("--candidate-social-limit", type=int, default=os.getenv("XUEQIU_STATUS_CANDIDATE_SOCIAL_LIMIT", "150"), help="Top discussions stocks from xueqiu_social_count.")
+    parser.add_argument("--candidate-hot-limit", type=int, default=os.getenv("XUEQIU_STATUS_CANDIDATE_HOT_LIMIT", "200"), help="Hot-rank stocks from xueqiu_hot_rank.")
+    parser.add_argument("--candidate-cube-limit", type=int, default=os.getenv("XUEQIU_STATUS_CANDIDATE_CUBE_LIMIT", "100"), help="Top cube-rebalance stocks from latest available xueqiu_cube_rebalance date.")
     parser.add_argument("--start-index", type=int, default=0, help="Zero-based start index in the resolved code list.")
     parser.add_argument("--part-index", type=int, default=0, help="Starting output part index.")
-    parser.add_argument("--workers", type=int, default=4, help="Concurrent symbol workers.")
-    parser.add_argument("--batch-size", type=int, default=100, help="Symbols per output part.")
+    parser.add_argument("--workers", type=int, default=os.getenv("XUEQIU_STATUS_WORKERS", "2"), help="Concurrent symbol workers.")
+    parser.add_argument("--batch-size", type=int, default=os.getenv("XUEQIU_STATUS_BATCH_SIZE", "20"), help="Symbols per output part.")
     parser.add_argument("--count", type=int, default=20, help="Requested rows per page. Xueqiu currently returns 20.")
-    parser.add_argument("--max-pages", type=int, default=50, help="Maximum pages per symbol.")
-    parser.add_argument("--sleep", type=float, default=0.02, help="Sleep seconds before each page request.")
-    parser.add_argument("--timeout", type=float, default=20.0, help="HTTP timeout seconds.")
-    parser.add_argument("--retries", type=int, default=3, help="Retries per page.")
+    parser.add_argument("--max-pages", type=int, default=os.getenv("XUEQIU_STATUS_MAX_PAGES", "20"), help="Maximum pages per symbol.")
+    parser.add_argument("--sleep", type=float, default=os.getenv("XUEQIU_STATUS_SLEEP", "1.0"), help="Sleep seconds before each page request.")
+    parser.add_argument("--timeout", type=float, default=os.getenv("XUEQIU_STATUS_TIMEOUT", "20"), help="HTTP timeout seconds.")
+    parser.add_argument("--retries", type=int, default=os.getenv("XUEQIU_STATUS_RETRIES", "1"), help="Retries per page.")
     parser.add_argument(
         "--replace-existing",
         action="store_true",
         help="Replace an existing date partition. Without this flag, existing partitions fail fast.",
     )
-    return parser.parse_args()
+    return parse_dated_args(parser)
 
 
 def main() -> str:
@@ -486,7 +487,7 @@ def main() -> str:
             raise RuntimeError(f"Failed to fetch {len(failures)} of {len(codes)} symbols")
 
         remove_output_backup(backup_dir)
-        record_task_output(args.table_name, output_dir, total_rows, "partition replacement")
+
         summary = f"path={output_dir.as_posix()}; rows={total_rows}; pages={total_pages}; parts={part_index}"
         print(f"write_done {summary}", flush=True)
         return summary

@@ -21,7 +21,7 @@ SKILL_ROOT = Path(__file__).resolve().parents[2]
 if str(SKILL_ROOT) not in sys.path:
     sys.path.insert(0, str(SKILL_ROOT))
 
-from scripts.common.scheduler import configure_project, configured_data_root, record_task_output
+from scripts.common.project import configure_project, configured_data_root
 
 # ---------------------------------------------------------------------------
 # setup_logger
@@ -490,7 +490,7 @@ def dump_data(dump_path: str, dataset_path: str):
     }
     logger = setup_logger("dump_data")
     dump_path = Path(dump_path)
-    dataset_path = Path(dataset_path)
+    data_root = Path(dataset_path)
     with tarfile.open(dump_path, "r:gz") as tar:
         tar.extractall(dump_path.parent / "data")
     for file in (dump_path.parent / "data").glob("*.parquet"):
@@ -499,12 +499,13 @@ def dump_data(dump_path: str, dataset_path: str):
             if file.stem.startswith(key):
                 df = pd.read_parquet(file)
                 if df.empty:
-                    record_task_output(key, dataset_path / key, 0, "skipped: empty input")
+
                     logger.info("Skipping empty dataset: %s", file.stem)
                     file.unlink()
                     matched = True
                     break
-                dt = DuckTable(dataset_path / key)
+                table_path = data_root / key
+                dt = DuckTable(table_path)
                 if part := config[key]["partition"]:
                     source_col = config[key].get("partition_source", "time")
                     if source_col not in df.columns:
@@ -515,9 +516,8 @@ def dump_data(dump_path: str, dataset_path: str):
                 dt.upsert(
                     df, keys=config[key]["keys"], partition_by=[part] if part else None
                 )
-                record_task_output(key, dataset_path / key, len(df))
                 file.unlink()
-                logger.info(f"File {file.stem} dumped successfully!")
+                logger.info("write_done table=%s path=%s rows=%d", key, table_path, len(df))
                 matched = True
                 break
         if not matched:

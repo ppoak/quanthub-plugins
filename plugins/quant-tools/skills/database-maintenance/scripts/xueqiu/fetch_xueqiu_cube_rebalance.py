@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import os
 import sys
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -22,7 +23,7 @@ SKILL_ROOT = Path(__file__).resolve().parents[2]
 if str(SKILL_ROOT) not in sys.path:
     sys.path.insert(0, str(SKILL_ROOT))
 
-from scripts.common.scheduler import configure_project, configured_data_root, record_task_output
+from scripts.common.project import configure_project, configured_data_root, parse_dated_args
 
 from scripts.xueqiu.client import (
     TokenInvalidNotifier,
@@ -194,22 +195,22 @@ def fetch_codes(
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Fetch Xueqiu cube rebalance trade counts.")
     parser.add_argument("--project-root", default=".", help="Target project directory.")
-    parser.add_argument("--date", required=True, help="Universe date, format YYYY-MM-DD or YYYYMMDD.")
+    parser.add_argument("--date", help="Universe date (YYYY-MM-DD or YYYYMMDD). Defaults to today in the business timezone.")
     parser.add_argument("--data-root", default=configured_data_root("XUEQIU_DATA_ROOT"), help="Data root directory.")
-    parser.add_argument("--table-name", default="xueqiu_cube_rebalance", help="Output table name under data root.")
+    parser.add_argument("--table-name", default=os.getenv("XUEQIU_CUBE_REBALANCE_TABLE", "xueqiu_cube_rebalance"), help="Output table name under data root.")
     add_xueqiu_auth_args(parser)
     parser.add_argument("--codes", nargs="*", default=None, help="Optional code list, e.g. 002384.SZ SH688008.")
     parser.add_argument("--limit", type=int, default=None, help="Optional limit for smoke tests.")
-    parser.add_argument("--workers", type=int, default=2, help="Concurrent symbol workers.")
-    parser.add_argument("--sleep", type=float, default=0.05, help="Sleep seconds before each symbol request.")
-    parser.add_argument("--timeout", type=float, default=20.0, help="HTTP timeout seconds.")
-    parser.add_argument("--retries", type=int, default=3, help="Retries per request.")
-    parser.add_argument("--failure-retry-rounds", type=int, default=1, help="Retry rounds for symbols that failed first pass.")
-    parser.add_argument("--failure-retry-workers", type=int, default=1, help="Workers for failed-symbol retry rounds.")
-    parser.add_argument("--failure-retry-sleep", type=float, default=2.0, help="Sleep seconds for failed-symbol retry rounds.")
-    parser.add_argument("--failure-retry-timeout", type=float, default=30.0, help="HTTP timeout for failed-symbol retry rounds.")
-    parser.add_argument("--failure-retry-retries", type=int, default=5, help="HTTP retries for failed-symbol retry rounds.")
-    return parser.parse_args()
+    parser.add_argument("--workers", type=int, default=os.getenv("XUEQIU_CUBE_WORKERS", "2"), help="Concurrent symbol workers.")
+    parser.add_argument("--sleep", type=float, default=os.getenv("XUEQIU_CUBE_SLEEP", "0.2"), help="Sleep seconds before each symbol request.")
+    parser.add_argument("--timeout", type=float, default=os.getenv("XUEQIU_CUBE_TIMEOUT", "20"), help="HTTP timeout seconds.")
+    parser.add_argument("--retries", type=int, default=os.getenv("XUEQIU_CUBE_RETRIES", "1"), help="Retries per request.")
+    parser.add_argument("--failure-retry-rounds", type=int, default=os.getenv("XUEQIU_CUBE_FAILURE_RETRY_ROUNDS", "1"), help="Retry rounds for symbols that failed first pass.")
+    parser.add_argument("--failure-retry-workers", type=int, default=os.getenv("XUEQIU_CUBE_FAILURE_RETRY_WORKERS", "1"), help="Workers for failed-symbol retry rounds.")
+    parser.add_argument("--failure-retry-sleep", type=float, default=os.getenv("XUEQIU_CUBE_FAILURE_RETRY_SLEEP", "2.0"), help="Sleep seconds for failed-symbol retry rounds.")
+    parser.add_argument("--failure-retry-timeout", type=float, default=os.getenv("XUEQIU_CUBE_FAILURE_RETRY_TIMEOUT", "30"), help="HTTP timeout for failed-symbol retry rounds.")
+    parser.add_argument("--failure-retry-retries", type=int, default=os.getenv("XUEQIU_CUBE_FAILURE_RETRY_RETRIES", "5"), help="HTTP retries for failed-symbol retry rounds.")
+    return parse_dated_args(parser)
 
 
 def main() -> str:
@@ -268,7 +269,7 @@ def main() -> str:
 
     df = rows_to_frame(all_rows)
     written = write_upsert_partitioned(df, data_root, args.table_name)
-    record_task_output(args.table_name, data_root / args.table_name, len(df))
+
     summary = f"table={args.table_name}; rows={len(df)}; partitions={len(written)}"
     print(f"write_done {summary}")
     if remaining_failures:

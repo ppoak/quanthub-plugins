@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import os
 import sys
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -17,7 +18,7 @@ SKILL_ROOT = Path(__file__).resolve().parents[2]
 if str(SKILL_ROOT) not in sys.path:
     sys.path.insert(0, str(SKILL_ROOT))
 
-from scripts.common.scheduler import configure_project, configured_data_root, record_task_output
+from scripts.common.project import configure_project, configured_data_root, parse_dated_args
 
 from scripts.xueqiu.client import (
     XueqiuClient,
@@ -53,15 +54,19 @@ class XueqiuHotRankRow:
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Fetch Xueqiu hot-rank data into Hive-partitioned parquet.")
     parser.add_argument("--project-root", default=".", help="Target project directory.")
-    parser.add_argument("--date", required=True, help="Date, format YYYY-MM-DD or YYYYMMDD.")
+    parser.add_argument("--date", help="Date (YYYY-MM-DD or YYYYMMDD). Defaults to today in the business timezone.")
     parser.add_argument("--data-root", default=configured_data_root("XUEQIU_DATA_ROOT"), help="Data root directory.")
-    parser.add_argument("--table-name", default="xueqiu_hot_rank", help="Output table name.")
+    parser.add_argument("--table-name", default=os.getenv("XUEQIU_HOT_RANK_TABLE", "xueqiu_hot_rank"), help="Output table name.")
     add_xueqiu_auth_args(parser)
-    parser.add_argument("--timeout", type=float, default=20.0, help="HTTP timeout seconds.")
-    parser.add_argument("--retries", type=int, default=3, help="Retries per endpoint.")
+    parser.add_argument("--timeout", type=float, default=os.getenv("XUEQIU_HOT_RANK_TIMEOUT", os.getenv("XUEQIU_SOCIAL_TIMEOUT", "20")), help="HTTP timeout seconds.")
+    parser.add_argument("--retries", type=int, default=os.getenv("XUEQIU_HOT_RANK_RETRIES", os.getenv("XUEQIU_SOCIAL_RETRIES", "1")), help="Retries per endpoint.")
     parser.add_argument("--hot-size", type=int, default=100, help="Hot stock list size. Xueqiu currently caps it at 100.")
-    parser.add_argument("--hot-rank-types", nargs="*", type=int, default=[12, 22], help="Xueqiu hot stock list type values.")
-    return parser.parse_args()
+    parser.add_argument("--hot-rank-types", nargs="*", type=int, help="Xueqiu hot stock list type values.")
+    args = parse_dated_args(parser)
+    if args.hot_rank_types is None:
+        values = os.getenv("XUEQIU_HOT_RANK_TYPES", "12 22").replace(",", " ").split()
+        args.hot_rank_types = [int(value) for value in values]
+    return args
 
 
 def fetch_hot_rank(
@@ -161,7 +166,7 @@ def main() -> str:
     )
     if df.empty:
         summary = f"date={target_date}; table={args.table_name}; rows=0"
-        record_task_output(args.table_name, data_root / args.table_name, 0, "skipped: empty input")
+
         print(f"write_skipped table={args.table_name} rows=0")
         print(summary)
         return summary
@@ -183,7 +188,7 @@ def main() -> str:
         ],
     )
     summary = f"date={target_date}; table={args.table_name}; rows={len(df)}"
-    record_task_output(args.table_name, output_path, len(df), "partition replacement")
+
     print(f"write_done table={args.table_name} path={output_path.as_posix()} rows={len(df)}")
     print(summary)
     return summary

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import os
 import sys
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -21,7 +22,7 @@ SKILL_ROOT = Path(__file__).resolve().parents[2]
 if str(SKILL_ROOT) not in sys.path:
     sys.path.insert(0, str(SKILL_ROOT))
 
-from scripts.common.scheduler import configure_project, configured_data_root, record_task_output
+from scripts.common.project import configure_project, configured_data_root, parse_dated_args
 
 from scripts.eastmoney.client import (
     EastMoneyDataClient,
@@ -276,7 +277,7 @@ def build_client(args: argparse.Namespace) -> EastMoneyDataClient:
         platform=client.platform,
         device_id=args.device_id or client.device_id,
         em_gt=args.em_gt or client.em_gt,
-        proxy=args.proxy or None,
+        proxy=args.proxy if args.proxy is not None else os.getenv("EASTMONEY_MONI_PROXY"),
         timeout=args.timeout,
         retries=args.retries,
         retry_sleep=args.retry_sleep,
@@ -286,15 +287,15 @@ def build_client(args: argparse.Namespace) -> EastMoneyDataClient:
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Fetch EastMoney stock sentiment data into Hive parquet.")
     parser.add_argument("--project-root", default=".", help="Target project directory.")
-    parser.add_argument("--date", required=True, help="Universe date, format YYYY-MM-DD or YYYYMMDD.")
+    parser.add_argument("--date", help="Universe date (YYYY-MM-DD or YYYYMMDD). Defaults to today in the business timezone.")
     parser.add_argument("--data-root", default=configured_data_root("EASTMONEY_DATA_ROOT"), help="Data root directory.")
-    parser.add_argument("--table-name", default=DEFAULT_TABLE_NAME, help="Output table name under data root.")
+    parser.add_argument("--table-name", default=os.getenv("EASTMONEY_STOCK_SENTIMENT_TABLE", DEFAULT_TABLE_NAME), help="Output table name under data root.")
     parser.add_argument("--codes", nargs="*", default=None, help="Optional code list, e.g. 600519.SH SZ300308.")
-    parser.add_argument("--limit", type=int, default=None, help="Optional limit for smoke tests.")
-    parser.add_argument("--workers", type=int, default=8, help="Concurrent stock workers.")
-    parser.add_argument("--sleep", type=float, default=0.2, help="Sleep seconds before each stock request batch.")
-    parser.add_argument("--timeout", type=float, default=20.0, help="HTTP timeout seconds.")
-    parser.add_argument("--retries", type=int, default=1, help="Retries per request.")
+    parser.add_argument("--limit", type=int, default=os.getenv("EASTMONEY_STOCK_SENTIMENT_LIMIT") or None, help="Optional limit for smoke tests.")
+    parser.add_argument("--workers", type=int, default=os.getenv("EASTMONEY_STOCK_SENTIMENT_WORKERS", "8"), help="Concurrent stock workers.")
+    parser.add_argument("--sleep", type=float, default=os.getenv("EASTMONEY_STOCK_SENTIMENT_SLEEP", "0.2"), help="Sleep seconds before each stock request batch.")
+    parser.add_argument("--timeout", type=float, default=os.getenv("EASTMONEY_STOCK_SENTIMENT_TIMEOUT", "20"), help="HTTP timeout seconds.")
+    parser.add_argument("--retries", type=int, default=os.getenv("EASTMONEY_STOCK_SENTIMENT_RETRIES", "1"), help="Retries per request.")
     parser.add_argument("--retry-sleep", type=float, default=1.0, help="Retry backoff base seconds.")
     parser.add_argument(
         "--all-history",
@@ -316,7 +317,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--device-id", default=None, help="EastMoney app device id.")
     parser.add_argument("--em-gt", default=None, help="EastMoney EM-GT header value.")
     parser.add_argument("--stock-card-client-version", default=None, help="EastMoney stockCard client version.")
-    return parser.parse_args()
+    return parse_dated_args(parser)
 
 
 def main() -> str:
@@ -374,7 +375,7 @@ def main() -> str:
 
     df = rows_to_frame(rows, target_date=target_row_date)
     written = write_upsert_partitioned(df, data_root, args.table_name)
-    record_task_output(args.table_name, data_root / args.table_name, len(df))
+
     summary = f"table={args.table_name}; rows={len(df)}; partitions={len(written)}"
     print(f"write_done {summary}", flush=True)
     return summary

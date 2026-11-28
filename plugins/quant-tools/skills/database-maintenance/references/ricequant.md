@@ -6,7 +6,7 @@
 | --- | --- |
 | `scripts/ricequant/client.py` | 在 RiceQuant 研究服务器调用 `rqdatac`，导出 Parquet 数据集并打包为 `data.tar.gz`。 |
 | `scripts/ricequant/fetch_ricequant.py` | 通过 Selenium 运行服务器 notebook，下载并解包数据，规范化后 upsert 到本地 Hive 分区 Parquet。 |
-| `scripts/scheduler.py` | 默认在交易日 `19:30` 调用 `fetch_ricequant.py`，并维护任务日志和通知。 |
+
 
 ## 环境配置
 
@@ -20,10 +20,7 @@
 | `DOWNLOAD_PATH` | Selenium 下载目录。 |
 | `DATASET_PATH` | 本地数据根目录，例如 `data` 或自定义绝对路径。 |
 | `RICEQUANT_HEADLESS` | 默认 `0`；设为 `1` 使用无头 Chrome。 |
-| `RICEQUANT_SCHEDULE_TIME` | 调度时间，默认 `19:30`。 |
-| `RICEQUANT_SCHEDULE_DAYS` | 调度星期，默认工作日；统一调度器再校验 A 股交易日。 |
 
-调度器在任务结束后发送状态邮件。邮件使用 Database Maintenance 的全局 SMTP 配置与收件人，单封邮件以表格列出起止时间、耗时及各表实际完成的写入输入条数/路径，不附全量日志。
 
 浏览器后端使用本机安装的 Chrome。默认无需手工安装 ChromeDriver；首次启动需要联网准备驱动，后续复用缓存。Chrome 更新后自动匹配驱动；显式指定 `CHROME_DRIVER_PATH` 时需自行保持版本匹配。旧 `EDGE_DRIVER_PATH` 不再被 RiceQuant 读取。
 
@@ -64,12 +61,6 @@ uv run --locked python "<path-to-skill>/scripts/ricequant/fetch_ricequant.py"
 uv run --locked python -c "import runpy; module=runpy.run_path('<path-to-skill>/scripts/ricequant/fetch_ricequant.py'); module['dump_data']('downloads/data.tar.gz', 'data')"
 ```
 
-统一调度器清单与 dry-run：
-
-```shell
-uv run --locked python "<path-to-skill>/scripts/scheduler.py" --list-jobs
-uv run --locked python "<path-to-skill>/scripts/scheduler.py" --run-once ricequant --date 2026-06-04 --dry-run
-```
 
 DuckDB 查询最近日期分区：
 
@@ -88,7 +79,7 @@ print(duckdb.sql("""
 - 新增数据集时，同步维护服务器端导出函数与本地 `dump_data()` 映射。
 - 先用小型 `data.tar.gz` 验证导入，再运行全量日常更新。
 - 出现 Upsert 键重复时，先检查并修正服务器导出结果，再执行导入。
-- Selenium、下载和数据源服务状态记录在任务日志及调度通知中。
+- Selenium、下载和导入结果输出到终端；Notebook 决定增量范围，本地脚本不接收 `--date`。
 - 下载前将本地同名旧包保留为 `data.tar.gz.previous-<id>`，新包须完成下载且能读取 tar 成员后才进入导入。服务器归档保留，浏览器在成功或异常退出时关闭。
 - 空数据集记录为跳过，不写入空分区。
 - Notebook 执行结束后检查错误输出，执行失败时终止下载。

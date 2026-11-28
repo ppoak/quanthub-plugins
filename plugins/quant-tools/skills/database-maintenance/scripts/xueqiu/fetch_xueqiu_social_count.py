@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import os
 import sys
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -19,7 +20,7 @@ SKILL_ROOT = Path(__file__).resolve().parents[2]
 if str(SKILL_ROOT) not in sys.path:
     sys.path.insert(0, str(SKILL_ROOT))
 
-from scripts.common.scheduler import configure_project, configured_data_root, record_task_output
+from scripts.common.project import configure_project, configured_data_root, parse_dated_args
 
 from scripts.xueqiu.client import (
     XueqiuClient,
@@ -45,22 +46,22 @@ class XueqiuSocialCountRow:
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Fetch Xueqiu social-count data into Hive-partitioned parquet.")
     parser.add_argument("--project-root", default=".", help="Target project directory.")
-    parser.add_argument("--date", required=True, help="Date, format YYYY-MM-DD or YYYYMMDD.")
+    parser.add_argument("--date", help="Date (YYYY-MM-DD or YYYYMMDD). Defaults to today in the business timezone.")
     parser.add_argument("--data-root", default=configured_data_root("XUEQIU_DATA_ROOT"), help="Data root directory.")
-    parser.add_argument("--table-name", default="xueqiu_social_count", help="Output table name.")
+    parser.add_argument("--table-name", default=os.getenv("XUEQIU_SOCIAL_COUNT_TABLE", "xueqiu_social_count"), help="Output table name.")
     add_xueqiu_auth_args(parser)
     parser.add_argument("--codes", nargs="*", default=None, help="Optional code list, e.g. 000001.SZ SZ301439.")
     parser.add_argument("--limit", type=int, default=None, help="Optional limit for smoke tests.")
-    parser.add_argument("--workers", type=int, default=2, help="Concurrent fetch workers.")
-    parser.add_argument("--sleep", type=float, default=0.05, help="Sleep seconds between endpoint requests.")
-    parser.add_argument("--timeout", type=float, default=20.0, help="HTTP timeout seconds.")
-    parser.add_argument("--retries", type=int, default=3, help="Retries per endpoint.")
-    parser.add_argument("--failure-retry-rounds", type=int, default=1, help="Retry rounds for symbols that failed first pass.")
-    parser.add_argument("--failure-retry-workers", type=int, default=1, help="Workers for failed-symbol retry rounds.")
-    parser.add_argument("--failure-retry-sleep", type=float, default=1.0, help="Sleep seconds for failed-symbol retry rounds.")
-    parser.add_argument("--failure-retry-timeout", type=float, default=30.0, help="HTTP timeout for failed-symbol retry rounds.")
-    parser.add_argument("--failure-retry-retries", type=int, default=3, help="HTTP retries for failed-symbol retry rounds.")
-    return parser.parse_args()
+    parser.add_argument("--workers", type=int, default=os.getenv("XUEQIU_SOCIAL_COUNT_WORKERS", os.getenv("XUEQIU_SOCIAL_WORKERS", "2")), help="Concurrent fetch workers.")
+    parser.add_argument("--sleep", type=float, default=os.getenv("XUEQIU_SOCIAL_COUNT_SLEEP", os.getenv("XUEQIU_SOCIAL_SLEEP", "0.2")), help="Sleep seconds between endpoint requests.")
+    parser.add_argument("--timeout", type=float, default=os.getenv("XUEQIU_SOCIAL_COUNT_TIMEOUT", os.getenv("XUEQIU_SOCIAL_TIMEOUT", "30")), help="HTTP timeout seconds.")
+    parser.add_argument("--retries", type=int, default=os.getenv("XUEQIU_SOCIAL_COUNT_RETRIES", os.getenv("XUEQIU_SOCIAL_RETRIES", "2")), help="Retries per endpoint.")
+    parser.add_argument("--failure-retry-rounds", type=int, default=os.getenv("XUEQIU_SOCIAL_COUNT_FAILURE_RETRY_ROUNDS", "1"), help="Retry rounds for symbols that failed first pass.")
+    parser.add_argument("--failure-retry-workers", type=int, default=os.getenv("XUEQIU_SOCIAL_COUNT_FAILURE_RETRY_WORKERS", "1"), help="Workers for failed-symbol retry rounds.")
+    parser.add_argument("--failure-retry-sleep", type=float, default=os.getenv("XUEQIU_SOCIAL_COUNT_FAILURE_RETRY_SLEEP", "1.0"), help="Sleep seconds for failed-symbol retry rounds.")
+    parser.add_argument("--failure-retry-timeout", type=float, default=os.getenv("XUEQIU_SOCIAL_COUNT_FAILURE_RETRY_TIMEOUT", "30"), help="HTTP timeout for failed-symbol retry rounds.")
+    parser.add_argument("--failure-retry-retries", type=int, default=os.getenv("XUEQIU_SOCIAL_COUNT_FAILURE_RETRY_RETRIES", "3"), help="HTTP retries for failed-symbol retry rounds.")
+    return parse_dated_args(parser)
 
 
 def fetch_one(
@@ -218,7 +219,7 @@ def main() -> str:
         ["code", "date", "followers", "discussions", "ingested_at"],
     )
     summary = f"date={trade_date}; table={args.table_name}; symbols={len(codes)}; rows={len(df)}"
-    record_task_output(args.table_name, output_path, len(df), "partition replacement")
+
     print(f"write_done table={args.table_name} path={output_path.as_posix()} rows={len(df)}")
     if remaining_failures:
         for code, message in remaining_failures[:20]:

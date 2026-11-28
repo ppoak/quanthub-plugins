@@ -30,7 +30,7 @@ SKILL_ROOT = Path(__file__).resolve().parents[2]
 if str(SKILL_ROOT) not in sys.path:
     sys.path.insert(0, str(SKILL_ROOT))
 
-from scripts.common.scheduler import load_env_file, record_task_output
+from scripts.common.project import load_env_file
 from scripts.xueqiu.accounts import XueqiuAccount, load_accounts, parse_proxy_url, replace_account_token
 from scripts.xueqiu.client import DEFAULT_USER_AGENT, build_xueqiu_opener
 
@@ -283,14 +283,12 @@ def verify_token_account(
     return _account_username(request_json, account.phone, phones)
 
 
-def _record_account_summary(account: XueqiuAccount, value: str) -> None:
+def _report_account_failure(account: XueqiuAccount, reason: str) -> None:
     label = f"{account.id} ({account.phone[-4:]})"
-    if value.startswith("FAILED:"):
-        print(f"xueqiu_account_result account={label} {value}", flush=True)
-    record_task_output(f"Xueqiu account {label}", value, None, operation="account")
+    print(f"xueqiu_account_result account={label} FAILED: {reason}", flush=True)
 
 
-def scheduled_relogin(
+def check_accounts(
     *, total_timeout_seconds: int = 600,
     env_path: str | Path = ".env", profile_dir: str | Path | None = None,
 ) -> bool:
@@ -322,15 +320,14 @@ def scheduled_relogin(
                     raise ReloginFailed("QR login timed out")
             except Exception as exc:
                 detail = str(exc) if isinstance(exc, ReloginFailed) else f"Browser setup or cleanup failed ({type(exc).__name__})"
-                _record_account_summary(account, f"FAILED: {reason}. Relogin: {detail}")
+                _report_account_failure(account, f"{reason}. Relogin: {detail}")
                 success = False
                 continue
         except Exception as exc:
             detail = str(exc) if isinstance(exc, IdentityUnavailable) else type(exc).__name__
-            _record_account_summary(account, f"FAILED: Account verification: {detail}")
+            _report_account_failure(account, f"Account verification: {detail}")
             success = False
             continue
-        _record_account_summary(account, username)
         print(f"xueqiu_account_check_success account={account.id} username={username}")
     return success
 
@@ -661,20 +658,23 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         "--check-accounts", action="store_true",
         help="Verify each account. Request QR login for missing or rejected tokens or a phone mismatch.",
     )
-    parser.add_argument("--env-path", default=".env", help="Project dotenv path")
+    parser.add_argument("--project-root", default=".", help="Target project directory.")
+    parser.add_argument("--env-path", default=".env", help="Dotenv path relative to the project directory, or an absolute path.")
     parser.add_argument("--profile-dir", help="Root directory for persistent per-account login profiles")
-    parser.add_argument("--timeout", type=int, default=600, help="Maximum login wait in seconds")
+    parser.add_argument("--timeout", type=int, help="Maximum login wait in seconds (default: XUEQIU_RELOGIN_TIMEOUT or 600).")
     return parser.parse_args(argv)
 
 
 def main(argv: list[str] | None = None) -> int:
     args = parse_args(argv)
+    os.chdir(Path(args.project_root).expanduser())
     path = Path(args.env_path)
     load_env_file(path)
     try:
+        timeout = args.timeout if args.timeout is not None else int(os.getenv("XUEQIU_RELOGIN_TIMEOUT", "600"))
         if args.check_accounts:
-            return 0 if scheduled_relogin(
-                total_timeout_seconds=args.timeout, env_path=path, profile_dir=args.profile_dir,
+            return 0 if check_accounts(
+                total_timeout_seconds=timeout, env_path=path, profile_dir=args.profile_dir,
             ) else 1
         accounts = load_accounts(path)
         account = (
@@ -684,7 +684,7 @@ def main(argv: list[str] | None = None) -> int:
         if account is None:
             raise ValueError("Xueqiu account is not registered in the project dotenv file")
         username = playwright_relogin(
-            account, env_path=path, profile_dir=args.profile_dir, total_timeout_seconds=args.timeout,
+            account, env_path=path, profile_dir=args.profile_dir, total_timeout_seconds=timeout,
         )
     except (ReloginFailed, ValueError) as exc:
         print(f"Xueqiu relogin failed: {exc}")
