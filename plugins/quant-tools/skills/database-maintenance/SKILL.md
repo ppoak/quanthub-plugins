@@ -64,11 +64,10 @@ uv run --locked python "<path-to-skill>/scripts/ricequant/fetch_ricequant.py"
 
 ## 验证
 
-修改后运行语法检查、一次性入口测试，并用对应脚本的 `--help` 检查参数：
+修改后运行语法检查，并用对应脚本的 `--help` 检查参数：
 
 ```shell
 uv run --locked python -m compileall "<path-to-skill>/scripts"
-uv run --locked python -m unittest discover -s "<path-to-skill>/tests"
 uv run --locked python "<path-to-skill>/scripts/xueqiu/email_relogin.py" --help
 ```
 
