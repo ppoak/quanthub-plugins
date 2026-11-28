@@ -1,29 +1,21 @@
 from __future__ import annotations
 
 import argparse
-import sys
+import os
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 
 import pandas as pd
-import pyarrow as pa
-import pyarrow.parquet as pq
 
+from common.parquet import write_date_snapshot
+from common.project import configure_project, configured_data_root, parse_dated_args
+from common.universe import normalize_code
 
-
-
-SKILL_ROOT = Path(__file__).resolve().parents[2]
-if str(SKILL_ROOT) not in sys.path:
-    sys.path.insert(0, str(SKILL_ROOT))
-
-from scripts.common.scheduler import configure_project, configured_data_root, record_task_output
-
-from scripts.xueqiu.client import (
+from xueqiu.client import (
     XueqiuClient,
     add_xueqiu_auth_args,
     create_runtime,
-    normalize_code,
     optional_int,
     optional_int_from_float,
 )
@@ -53,15 +45,19 @@ class XueqiuHotRankRow:
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Fetch Xueqiu hot-rank data into Hive-partitioned parquet.")
     parser.add_argument("--project-root", default=".", help="Target project directory.")
-    parser.add_argument("--date", required=True, help="Date, format YYYY-MM-DD or YYYYMMDD.")
+    parser.add_argument("--date", help="Date (YYYY-MM-DD or YYYYMMDD). Defaults to today in the business timezone.")
     parser.add_argument("--data-root", default=configured_data_root("XUEQIU_DATA_ROOT"), help="Data root directory.")
-    parser.add_argument("--table-name", default="xueqiu_hot_rank", help="Output table name.")
+    parser.add_argument("--table-name", default=os.getenv("XUEQIU_HOT_RANK_TABLE", "xueqiu_hot_rank"), help="Output table name.")
     add_xueqiu_auth_args(parser)
-    parser.add_argument("--timeout", type=float, default=20.0, help="HTTP timeout seconds.")
-    parser.add_argument("--retries", type=int, default=3, help="Retries per endpoint.")
+    parser.add_argument("--timeout", type=float, default=os.getenv("XUEQIU_HOT_RANK_TIMEOUT", os.getenv("XUEQIU_SOCIAL_TIMEOUT", "20")), help="HTTP timeout seconds.")
+    parser.add_argument("--retries", type=int, default=os.getenv("XUEQIU_HOT_RANK_RETRIES", os.getenv("XUEQIU_SOCIAL_RETRIES", "1")), help="Retries per endpoint.")
     parser.add_argument("--hot-size", type=int, default=100, help="Hot stock list size. Xueqiu currently caps it at 100.")
-    parser.add_argument("--hot-rank-types", nargs="*", type=int, default=[12, 22], help="Xueqiu hot stock list type values.")
-    return parser.parse_args()
+    parser.add_argument("--hot-rank-types", nargs="*", type=int, help="Xueqiu hot stock list type values.")
+    args = parse_dated_args(parser)
+    if args.hot_rank_types is None:
+        values = os.getenv("XUEQIU_HOT_RANK_TYPES", "12 22").replace(",", " ").split()
+        args.hot_rank_types = [int(value) for value in values]
+    return args
 
 
 def fetch_hot_rank(
@@ -120,28 +116,12 @@ def fetch_hot_rank(
     return df[columns].sort_values(["date", "rank_type", "source_rank", "code"]).reset_index(drop=True)
 
 
-def write_hive_partition(df: pd.DataFrame, data_root: Path, table_name: str, columns: list[str]) -> Path:
-    if df.empty:
-        raise ValueError("No rows to write")
-    dates = sorted(pd.to_datetime(df["date"]).dt.date.unique())
-    if len(dates) != 1:
-        raise ValueError(f"Expected exactly one date partition, got {dates}")
-    trade_date = dates[0].isoformat()
-    output_dir = data_root / table_name / f"date={trade_date}"
-    output_dir.mkdir(parents=True, exist_ok=True)
-    output_path = output_dir / "data_0.parquet"
-    ordered = df[columns].drop(columns=["date"]).copy()
-    table = pa.Table.from_pandas(ordered, preserve_index=False)
-    pq.write_table(table, output_path, compression="zstd")
-    return output_path
-
-
 def main() -> str:
     configure_project()
     args = parse_args()
     target_date = pd.to_datetime(args.date).date().isoformat()
     data_root = Path(args.data_root)
-    accounts, proxy, notifier = create_runtime(args)
+    accounts, proxy, notifier = create_runtime(account_id=args.account, proxy=args.proxy)
     print(f"fetch_start table={args.table_name} date={target_date} rank_types={args.hot_rank_types}")
 
     client = XueqiuClient(
@@ -161,12 +141,12 @@ def main() -> str:
     )
     if df.empty:
         summary = f"date={target_date}; table={args.table_name}; rows=0"
-        record_task_output(args.table_name, data_root / args.table_name, 0, "skipped: empty input")
+
         print(f"write_skipped table={args.table_name} rows=0")
         print(summary)
         return summary
 
-    output_path = write_hive_partition(
+    output_path = write_date_snapshot(
         df,
         data_root,
         args.table_name,
@@ -183,7 +163,7 @@ def main() -> str:
         ],
     )
     summary = f"date={target_date}; table={args.table_name}; rows={len(df)}"
-    record_task_output(args.table_name, output_path, len(df), "partition replacement")
+
     print(f"write_done table={args.table_name} path={output_path.as_posix()} rows={len(df)}")
     print(summary)
     return summary

@@ -1,27 +1,12 @@
 from __future__ import annotations
-import sys
 
 import argparse
 import datetime as dt
 import os
-import subprocess
-import time
-from dataclasses import dataclass
 from pathlib import Path
 
-SKILL_ROOT = Path(__file__).resolve().parents[2]
-if str(SKILL_ROOT) not in sys.path:
-    sys.path.insert(0, str(SKILL_ROOT))
-
-from scripts.common.scheduler import configure_project, configured_data_root, record_task_output
-
-
-@dataclass(frozen=True)
-class SyncTarget:
-    name: str
-    source: Path
-    destination: str
-    include: str | None = None
+from common.project import configure_project, configured_data_root
+from huggingface.bucket import SyncTarget, destination_uri, run_sync_target
 
 
 FULL_TABLES = [
@@ -52,19 +37,15 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--quotes-min-start-date", default=os.getenv("HUGGINGFACE_BACKUP_QUOTES_MIN_START_DATE", "2015-01-01"))
     parser.add_argument("--token-env", default=os.getenv("HUGGINGFACE_TOKEN_ENV", "HUGGINGFACE_TOKEN"))
     parser.add_argument("--include-table", action="append", choices=ALL_TABLES)
-    parser.add_argument("--delete-remote-extra", action="store_true")
+    parser.add_argument(
+        "--delete-remote-extra", action=argparse.BooleanOptionalAction,
+        default=os.getenv("HUGGINGFACE_BACKUP_DELETE_REMOTE_EXTRA", "0").strip().lower() in {"1", "true", "yes", "on"},
+        help="Delete extra remote objects. Defaults to off unless enabled in project settings.",
+    )
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--max-retries", type=int, default=int(os.getenv("HUGGINGFACE_BACKUP_MAX_RETRIES", "5")))
     parser.add_argument("--retry-sleep-seconds", type=float, default=float(os.getenv("HUGGINGFACE_BACKUP_RETRY_SLEEP_SECONDS", "60")))
     return parser.parse_args()
-
-
-def hf_executable() -> str:
-    exe_name = "hf.exe" if os.name == "nt" else "hf"
-    candidate = Path(sys.executable).with_name(exe_name)
-    if candidate.exists():
-        return str(candidate)
-    return "hf"
 
 
 def resolve_data_root(repo_root: Path, value: str) -> Path:
@@ -72,11 +53,6 @@ def resolve_data_root(repo_root: Path, value: str) -> Path:
     if path.is_absolute():
         return path
     return (repo_root / path).resolve()
-
-
-def destination_uri(bucket_id: str, remote_prefix: str, table: str) -> str:
-    prefix = remote_prefix.strip("/")
-    return f"hf://buckets/{bucket_id}/{prefix}/{table}" if prefix else f"hf://buckets/{bucket_id}/{table}"
 
 
 def build_targets(data_root: Path, bucket_id: str, remote_prefix: str, start_date: dt.date, selected_tables: set[str]) -> list[SyncTarget]:
@@ -107,40 +83,6 @@ def build_targets(data_root: Path, bucket_id: str, remote_prefix: str, start_dat
         else:
             print(f"Skipping missing table directory: {source.as_posix()}")
     return targets
-
-
-def run_sync_target(target: SyncTarget, *, token: str, dry_run: bool, delete_remote_extra: bool, max_retries: int, retry_sleep_seconds: float) -> None:
-    command = [
-        hf_executable(),
-        "buckets",
-        "sync",
-        target.source.as_posix(),
-        target.destination,
-        "--token",
-        token,
-    ]
-    if target.include:
-        command.extend(["--include", target.include])
-    if dry_run:
-        command.append("--dry-run")
-    if delete_remote_extra:
-        command.append("--delete")
-
-    for attempt in range(1, max_retries + 1):
-        started_at = dt.datetime.now(dt.timezone.utc).replace(microsecond=0).isoformat()
-        print(f"SYNC_START name={target.name} attempt={attempt} started_at_utc={started_at}")
-        process = subprocess.run(command, text=True)
-        if process.returncode == 0:
-            finished_at = dt.datetime.now(dt.timezone.utc).replace(microsecond=0).isoformat()
-            if not dry_run:
-                record_task_output(target.name, target.destination, None, "remote backup sync")
-            print(f"SYNC_DONE name={target.name} attempt={attempt} finished_at_utc={finished_at}")
-            return
-        print(f"SYNC_FAIL name={target.name} attempt={attempt} return_code={process.returncode}")
-        if attempt < max_retries:
-            print(f"Sleeping {retry_sleep_seconds:.1f}s before retrying {target.name}")
-            time.sleep(retry_sleep_seconds)
-    raise RuntimeError(f"Sync failed after {max_retries} attempts: {target.name}")
 
 
 def main() -> None:

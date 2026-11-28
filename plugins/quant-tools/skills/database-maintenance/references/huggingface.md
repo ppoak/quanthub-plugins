@@ -4,12 +4,13 @@
 
 将允许名单内的本地数据库 Parquet 表同步到由 `HUGGINGFACE_BUCKET_ID` 指定的私有 Storage Bucket，用于异机备份与恢复。生产备份使用 Storage Bucket 的对象同步能力。
 
-## 脚本分工
+## 任务与同步模块
 
 | 文件 | 用途 |
 | --- | --- |
-| `scripts/huggingface/sync_huggingface_bucket.py` | 按表白名单生成同步目标，并通过 `hf buckets sync` 执行带重试的同步。 |
-| `scripts/scheduler.py` | 默认每天 `04:00` 调用备份脚本，并发送任务状态通知。 |
+| `scripts/sync_huggingface_bucket.py` | 定义备份白名单与分区范围，生成同步目标。 |
+| `scripts/huggingface/bucket.py` | 生成 Bucket URI，并通过 `hf buckets sync` 执行带重试的同步。 |
+
 
 ## 同步范围
 
@@ -47,7 +48,9 @@ tables/quotes_min/date=2026-06-05/<part>.parquet
 tables/xueqiu_status/date=2026-06-02/part_0000.parquet
 ```
 
-同步任务默认保留远端额外对象。审核完整本地与远端清单后，可通过 `--delete-remote-extra` 或 `HUGGINGFACE_BACKUP_DELETE_REMOTE_EXTRA=1` 启用远端清理。
+同步任务默认保留远端额外对象。审核完整本地与远端清单后，可通过 `--delete-remote-extra` 或 `HUGGINGFACE_BACKUP_DELETE_REMOTE_EXTRA=1` 启用远端清理；`--no-delete-remote-extra` 可覆盖环境变量并保留远端对象。
+
+迁移时请检查旧 `.env`：原先只用于调度任务的 `HUGGINGFACE_BACKUP_DELETE_REMOTE_EXTRA=1` 现在也会影响手动运行。
 
 ## 环境配置
 
@@ -59,7 +62,7 @@ HUGGINGFACE_BUCKET_ID=<user-or-org>/<private-bucket>
 HUGGINGFACE_BACKUP_DATA_ROOT=data
 HUGGINGFACE_BACKUP_REMOTE_PREFIX=tables
 HUGGINGFACE_BACKUP_QUOTES_MIN_START_DATE=2015-01-01
-HUGGINGFACE_BACKUP_SCHEDULE_TIME=04:00
+
 HUGGINGFACE_BACKUP_MAX_RETRIES=5
 HUGGINGFACE_BACKUP_RETRY_SLEEP_SECONDS=60
 ```
@@ -74,40 +77,18 @@ HUGGINGFACE_BACKUP_RETRY_SLEEP_SECONDS=60
 ./.venv/Scripts/hf buckets list --token <token>
 ```
 
-小范围 dry-run：
+小范围 dry-run（连接 bucket 比对，不执行远端写入）：
 
 ```sh
-uv run --locked python "<path-to-skill>/scripts/huggingface/sync_huggingface_bucket.py" --include-table eastmoney_intraday_changes --dry-run
+uv run --locked python "<path-to-skill>/scripts/sync_huggingface_bucket.py" --include-table eastmoney_intraday_changes --dry-run
 ```
 
-执行完整备份：
+执行完整备份，保留远端额外对象：
 
 ```sh
-uv run --locked python "<path-to-skill>/scripts/huggingface/sync_huggingface_bucket.py"
+uv run --locked python "<path-to-skill>/scripts/sync_huggingface_bucket.py" --no-delete-remote-extra
 ```
 
-通过统一调度器预览或运行一次：
-
-```sh
-uv run --locked python "<path-to-skill>/scripts/scheduler.py" --run-once huggingface_backup --dry-run
-uv run --locked python "<path-to-skill>/scripts/scheduler.py" --run-once huggingface_backup
-```
-
-## 调度与通知
-
-`huggingface_backup` 默认每天 `04:00` 运行，按配置星期调度。统一调度器在任务结束后发送成功或失败邮件，使用共享通知设置：
-
-```dotenv
-DATABASE_MAINTENANCE_NOTIFY=1
-DATABASE_MAINTENANCE_EMAIL_TO=<notification-recipient>
-SENDER=<smtp-sender>
-EMAIL_PASSWORD=<smtp-password>
-SMTP_SERVER=<smtp-server>
-SMTP_PORT=465
-SMTP_USE_SSL=1
-```
-
-每封邮件正文附带当前备份任务的标准输出与错误输出；完整调度记录保存在 `.tmp/database-maintenance/`。
 
 ## 运行维护
 

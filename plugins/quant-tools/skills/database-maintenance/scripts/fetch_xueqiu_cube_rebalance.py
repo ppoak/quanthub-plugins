@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import argparse
-import sys
+import os
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
@@ -11,26 +11,16 @@ from typing import Any
 from zoneinfo import ZoneInfo
 
 import pandas as pd
-import pyarrow as pa
-import pyarrow.parquet as pq
 
+from common.parquet import upsert_date_partitions
+from common.project import configure_project, configured_data_root, parse_dated_args
+from common.universe import load_codes_from_quotes_day, normalize_code
 
-
-
-
-SKILL_ROOT = Path(__file__).resolve().parents[2]
-if str(SKILL_ROOT) not in sys.path:
-    sys.path.insert(0, str(SKILL_ROOT))
-
-from scripts.common.scheduler import configure_project, configured_data_root, record_task_output
-
-from scripts.xueqiu.client import (
+from xueqiu.client import (
     TokenInvalidNotifier,
     XueqiuClient,
     add_xueqiu_auth_args,
     create_runtime,
-    load_codes_from_quotes_day,
-    normalize_code,
     optional_int,
     to_xueqiu_symbol,
 )
@@ -132,41 +122,8 @@ def rows_to_frame(rows: list[CubeRebalanceRow]) -> pd.DataFrame:
     return df[columns].sort_values(["date", "code"]).reset_index(drop=True)
 
 
-def write_upsert_partitioned(df: pd.DataFrame, data_root: Path, table_name: str) -> list[Path]:
-    if df.empty:
-        return []
-    output_root = data_root / table_name
-    output_root.mkdir(parents=True, exist_ok=True)
-    written: list[Path] = []
-    for dt, part_df in df.groupby("date", sort=True):
-        trade_date = pd.to_datetime(dt).date().isoformat()
-        part_dir = output_root / f"date={trade_date}"
-        part_dir.mkdir(parents=True, exist_ok=True)
-        output_path = part_dir / "data_0.parquet"
-        existing_files = sorted(part_dir.glob("*.parquet"))
-        if existing_files:
-            existing_parts = []
-            for path in existing_files:
-                existing_part = pd.read_parquet(path)
-                if "date" not in existing_part.columns:
-                    existing_part["date"] = trade_date
-                existing_parts.append(existing_part)
-            existing = pd.concat(existing_parts, ignore_index=True)
-            existing["date"] = pd.to_datetime(existing["date"]).dt.date
-            combined = pd.concat([existing, part_df], ignore_index=True, sort=False)
-            combined = (
-                combined.sort_values(["code", "date", "ingested_at"])
-                .groupby(["code", "date"], as_index=False, sort=True)
-                .last()
-            )
-            for path in existing_files:
-                if path != output_path:
-                    path.unlink()
-            part_df = combined
-        table = pa.Table.from_pandas(part_df.drop(columns=["date"]), preserve_index=False)
-        pq.write_table(table, output_path, compression="zstd")
-        written.append(output_path)
-    return written
+def merge_cube_rows(df: pd.DataFrame) -> pd.DataFrame:
+    return df.sort_values(["code", "date", "ingested_at"]).groupby(["code", "date"], as_index=False, sort=True).last()
 
 
 def fetch_codes(
@@ -194,22 +151,22 @@ def fetch_codes(
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Fetch Xueqiu cube rebalance trade counts.")
     parser.add_argument("--project-root", default=".", help="Target project directory.")
-    parser.add_argument("--date", required=True, help="Universe date, format YYYY-MM-DD or YYYYMMDD.")
+    parser.add_argument("--date", help="Universe date (YYYY-MM-DD or YYYYMMDD). Defaults to today in the business timezone.")
     parser.add_argument("--data-root", default=configured_data_root("XUEQIU_DATA_ROOT"), help="Data root directory.")
-    parser.add_argument("--table-name", default="xueqiu_cube_rebalance", help="Output table name under data root.")
+    parser.add_argument("--table-name", default=os.getenv("XUEQIU_CUBE_REBALANCE_TABLE", "xueqiu_cube_rebalance"), help="Output table name under data root.")
     add_xueqiu_auth_args(parser)
     parser.add_argument("--codes", nargs="*", default=None, help="Optional code list, e.g. 002384.SZ SH688008.")
     parser.add_argument("--limit", type=int, default=None, help="Optional limit for smoke tests.")
-    parser.add_argument("--workers", type=int, default=2, help="Concurrent symbol workers.")
-    parser.add_argument("--sleep", type=float, default=0.05, help="Sleep seconds before each symbol request.")
-    parser.add_argument("--timeout", type=float, default=20.0, help="HTTP timeout seconds.")
-    parser.add_argument("--retries", type=int, default=3, help="Retries per request.")
-    parser.add_argument("--failure-retry-rounds", type=int, default=1, help="Retry rounds for symbols that failed first pass.")
-    parser.add_argument("--failure-retry-workers", type=int, default=1, help="Workers for failed-symbol retry rounds.")
-    parser.add_argument("--failure-retry-sleep", type=float, default=2.0, help="Sleep seconds for failed-symbol retry rounds.")
-    parser.add_argument("--failure-retry-timeout", type=float, default=30.0, help="HTTP timeout for failed-symbol retry rounds.")
-    parser.add_argument("--failure-retry-retries", type=int, default=5, help="HTTP retries for failed-symbol retry rounds.")
-    return parser.parse_args()
+    parser.add_argument("--workers", type=int, default=os.getenv("XUEQIU_CUBE_WORKERS", "2"), help="Concurrent symbol workers.")
+    parser.add_argument("--sleep", type=float, default=os.getenv("XUEQIU_CUBE_SLEEP", "0.2"), help="Sleep seconds before each symbol request.")
+    parser.add_argument("--timeout", type=float, default=os.getenv("XUEQIU_CUBE_TIMEOUT", "20"), help="HTTP timeout seconds.")
+    parser.add_argument("--retries", type=int, default=os.getenv("XUEQIU_CUBE_RETRIES", "1"), help="Retries per request.")
+    parser.add_argument("--failure-retry-rounds", type=int, default=os.getenv("XUEQIU_CUBE_FAILURE_RETRY_ROUNDS", "1"), help="Retry rounds for symbols that failed first pass.")
+    parser.add_argument("--failure-retry-workers", type=int, default=os.getenv("XUEQIU_CUBE_FAILURE_RETRY_WORKERS", "1"), help="Workers for failed-symbol retry rounds.")
+    parser.add_argument("--failure-retry-sleep", type=float, default=os.getenv("XUEQIU_CUBE_FAILURE_RETRY_SLEEP", "2.0"), help="Sleep seconds for failed-symbol retry rounds.")
+    parser.add_argument("--failure-retry-timeout", type=float, default=os.getenv("XUEQIU_CUBE_FAILURE_RETRY_TIMEOUT", "30"), help="HTTP timeout for failed-symbol retry rounds.")
+    parser.add_argument("--failure-retry-retries", type=int, default=os.getenv("XUEQIU_CUBE_FAILURE_RETRY_RETRIES", "5"), help="HTTP retries for failed-symbol retry rounds.")
+    return parse_dated_args(parser)
 
 
 def main() -> str:
@@ -217,7 +174,7 @@ def main() -> str:
     args = parse_args()
     universe_date = pd.to_datetime(args.date).date().isoformat()
     data_root = Path(args.data_root)
-    accounts, proxy, notifier = create_runtime(args)
+    accounts, proxy, notifier = create_runtime(account_id=args.account, proxy=args.proxy)
 
     codes = args.codes
     if codes is None:
@@ -267,8 +224,8 @@ def main() -> str:
         all_rows.extend(retry_rows)
 
     df = rows_to_frame(all_rows)
-    written = write_upsert_partitioned(df, data_root, args.table_name)
-    record_task_output(args.table_name, data_root / args.table_name, len(df))
+    written = upsert_date_partitions(df, data_root, args.table_name, merge_rows=merge_cube_rows)
+
     summary = f"table={args.table_name}; rows={len(df)}; partitions={len(written)}"
     print(f"write_done {summary}")
     if remaining_failures:

@@ -1,13 +1,13 @@
 # EastMoney 数据采集
 
-## 脚本分工
+## 任务与共享客户端
 
 | 文件 | 用途 |
 | --- | --- |
-| `scripts/eastmoney/client.py` | 读取 `.env`、规范股票代码、加载证券范围并请求个股情绪和盘中异动接口。 |
-| `scripts/eastmoney/fetch_eastmoney_stock_sentiment.py` | 清洗个股情绪数据，按 `(code, date)` 写入 Hive 分区 Parquet。 |
-| `scripts/eastmoney/fetch_eastmoney_intraday_changes.py` | 清洗盘中异动事件，按 `(code, date, event_time, change_type, source_rank)` 写入 Hive 分区 Parquet。 |
-| `scripts/scheduler.py` | 在统一调度器中登记两项任务，管理日期、日志和通知。 |
+| `scripts/eastmoney/client.py` | 两项任务共用的客户端：处理来源身份、请求头、代理、超时与重试。 |
+| `scripts/fetch_eastmoney_stock_sentiment.py` | 选取股票池并合并情绪接口数据，按 `(code, date)` 写入 Hive 分区 Parquet。 |
+| `scripts/fetch_eastmoney_intraday_changes.py` | 分页采集盘中异动，按 `(code, date, event_time, change_type, source_rank)` 写入 Hive 分区 Parquet。 |
+
 
 ## 身份与请求配置
 
@@ -32,18 +32,17 @@
 
 ```dotenv
 EASTMONEY_DATA_ROOT=data
-EASTMONEY_SCHEDULE_TIME=22:00
+
 EASTMONEY_STOCK_SENTIMENT_TABLE=eastmoney_stock_sentiment
 EASTMONEY_STOCK_SENTIMENT_WORKERS=8
 EASTMONEY_STOCK_SENTIMENT_SLEEP=0.2
 EASTMONEY_INTRADAY_CHANGES_TABLE=eastmoney_intraday_changes
-EASTMONEY_INTRADAY_CHANGES_SCHEDULE_TIME=15:05
-EASTMONEY_INTRADAY_CHANGES_SCHEDULE_DAYS=weekday
+
 EASTMONEY_INTRADAY_CHANGES_PAGE_SIZE=5000
 EASTMONEY_INTRADAY_CHANGES_SLEEP=0.2
 ```
 
-个股情绪任务默认每天 `22:00` 运行；盘中异动任务默认在 A 股交易日 `15:05` 运行。两个任务的调度状态由统一调度器维护。调度器在表级任务完成后发送状态邮件，邮件正文以表格列出起止时间、耗时和各表写入条数/路径，不附全量日志；日志文件保存在 `.tmp/database-maintenance/`。
+脚本读取这些 `.env` 参数，命令行可覆盖。盘中异动只应在确认数据对应目标交易日时运行：`--date` 标记写入日期，不会向实时接口请求历史快照。
 
 ## 数据表
 
@@ -59,20 +58,20 @@ EASTMONEY_INTRADAY_CHANGES_SLEEP=0.2
 小范围情绪采集示例：
 
 ```sh
-uv run --locked python "<path-to-skill>/scripts/eastmoney/fetch_eastmoney_stock_sentiment.py" --date 2026-06-03 --codes 600519.SH --data-root data --table-name eastmoney_stock_sentiment_test --workers 1 --sleep 0 --timeout 20 --retries 0
+uv run --locked python "<path-to-skill>/scripts/fetch_eastmoney_stock_sentiment.py" --date 2026-06-03 --codes 600519.SH --data-root data --table-name eastmoney_stock_sentiment_test --workers 1 --sleep 0 --timeout 20 --retries 0
 ```
 
 盘中异动采集示例：
 
 ```sh
-uv run --locked python "<path-to-skill>/scripts/eastmoney/fetch_eastmoney_intraday_changes.py" --date <YYYY-MM-DD> --data-root data --table-name eastmoney_intraday_changes_test --change-types 大笔买入 大笔卖出 --sleep 0 --timeout 20 --retries 0
+uv run --locked python "<path-to-skill>/scripts/fetch_eastmoney_intraday_changes.py" --date <YYYY-MM-DD> --data-root data --table-name eastmoney_intraday_changes_test --change-types 大笔买入 大笔卖出 --sleep 0 --timeout 20 --retries 0
 ```
 
-正式运行时使用生产表名和经过确认的请求范围。调度清单与一次性运行统一使用：
+正式运行时使用生产表名和经过确认的请求范围：
 
 ```sh
-uv run --locked python "<path-to-skill>/scripts/scheduler.py" --list-jobs
-uv run --locked python "<path-to-skill>/scripts/scheduler.py" --run-once eastmoney_intraday_changes eastmoney_stock_sentiment --date <YYYY-MM-DD> --dry-run
+uv run --locked python "<path-to-skill>/scripts/fetch_eastmoney_intraday_changes.py"
+uv run --locked python "<path-to-skill>/scripts/fetch_eastmoney_stock_sentiment.py"
 ```
 
 ## 故障处理

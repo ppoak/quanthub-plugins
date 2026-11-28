@@ -1,6 +1,6 @@
 # 本地数据表契约
 
-本说明由 `database-maintenance` 维护，记录采集结果的表结构、分区和写入语义。下游流程读取数据前应以此契约确认字段、分区和来源口径；各数据源的认证、命令和调度参数见本 skill 的 RiceQuant、EastMoney、雪球及 Hugging Face 参考文档。
+本说明由 `database-maintenance` 维护，记录采集结果的表结构、分区和写入语义。下游流程读取数据前应以此契约确认字段、分区和来源口径；各数据源的认证和一次性命令见本 Skill 的 RiceQuant、EastMoney、雪球及 Hugging Face 参考文档。
 
 ## 存储与检查
 

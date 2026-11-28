@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import argparse
-import sys
+import os
 import time
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -9,24 +9,15 @@ from pathlib import Path
 from typing import Any
 
 import pandas as pd
-import pyarrow as pa
-import pyarrow.parquet as pq
 
+from common.parquet import upsert_date_partitions
+from common.project import configure_project, configured_data_root, parse_dated_args
+from common.universe import normalize_code
 
-
-
-
-SKILL_ROOT = Path(__file__).resolve().parents[2]
-if str(SKILL_ROOT) not in sys.path:
-    sys.path.insert(0, str(SKILL_ROOT))
-
-from scripts.common.scheduler import configure_project, configured_data_root, record_task_output
-
-from scripts.eastmoney.client import (
+from eastmoney.client import (
     EastMoneyDataClient,
     STOCK_CHANGE_TYPE_NAMES,
     STOCK_CHANGE_TYPES,
-    normalize_code,
 )
 
 
@@ -134,8 +125,10 @@ def fetch_all_changes(
             page_index=page_index,
             page_size=page_size,
         )
-        data = payload.get("data") if isinstance(payload.get("data"), dict) else {}
-        raw_rows = data.get("allstock") if isinstance(data, dict) else []
+        data = payload.get("data")
+        if not isinstance(data, dict):
+            data = {}
+        raw_rows = data.get("allstock")
         if total_count is None:
             try:
                 total_count = int(data.get("tc") or 0)
@@ -196,79 +189,32 @@ def merge_duplicate_rows(df: pd.DataFrame) -> pd.DataFrame:
     ).reset_index(drop=True)
 
 
-def write_upsert_partitioned(df: pd.DataFrame, data_root: Path, table_name: str) -> list[Path]:
-    if df.empty:
-        return []
-    output_root = data_root / table_name
-    output_root.mkdir(parents=True, exist_ok=True)
-    written: list[Path] = []
-    for dt, part_df in df.groupby("date", sort=True):
-        trade_date = pd.to_datetime(dt).date().isoformat()
-        part_dir = output_root / f"date={trade_date}"
-        part_dir.mkdir(parents=True, exist_ok=True)
-        output_path = part_dir / "data_0.parquet"
-        existing_files = sorted(part_dir.glob("*.parquet"))
-        if existing_files:
-            existing_parts = []
-            for path in existing_files:
-                existing_part = pd.read_parquet(path)
-                if "date" not in existing_part.columns:
-                    existing_part["date"] = trade_date
-                existing_parts.append(existing_part)
-            existing = pd.concat(existing_parts, ignore_index=True)
-            existing["date"] = pd.to_datetime(existing["date"]).dt.date
-            part_df = merge_duplicate_rows(pd.concat([existing, part_df], ignore_index=True, sort=False))
-            for path in existing_files:
-                if path != output_path:
-                    path.unlink()
-        table = pa.Table.from_pandas(part_df.drop(columns=["date"]), preserve_index=False)
-        pq.write_table(table, output_path, compression="zstd")
-        written.append(output_path)
-    return written
-
-
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Fetch EastMoney intraday stock changes into Hive parquet.")
     parser.add_argument("--project-root", default=".", help="Target project directory.")
-    parser.add_argument("--date", required=True, help="Trade date, format YYYY-MM-DD or YYYYMMDD.")
+    parser.add_argument("--date", help="Trade date (YYYY-MM-DD or YYYYMMDD). Defaults to today in the business timezone.")
     parser.add_argument("--data-root", default=configured_data_root("EASTMONEY_DATA_ROOT"), help="Data root directory.")
-    parser.add_argument("--table-name", default=DEFAULT_TABLE_NAME, help="Output table name under data root.")
-    parser.add_argument("--page-size", type=int, default=5000, help="EastMoney page size per change type.")
-    parser.add_argument("--sleep", type=float, default=0.2, help="Sleep seconds between change-type requests.")
-    parser.add_argument("--timeout", type=float, default=20.0, help="HTTP timeout seconds.")
-    parser.add_argument("--retries", type=int, default=1, help="Retries per request.")
+    parser.add_argument("--table-name", default=os.getenv("EASTMONEY_INTRADAY_CHANGES_TABLE", DEFAULT_TABLE_NAME), help="Output table name under data root.")
+    parser.add_argument("--page-size", type=int, default=os.getenv("EASTMONEY_INTRADAY_CHANGES_PAGE_SIZE", "5000"), help="EastMoney page size per change type.")
+    parser.add_argument("--sleep", type=float, default=os.getenv("EASTMONEY_INTRADAY_CHANGES_SLEEP", "0.2"), help="Sleep seconds between change-type requests.")
+    parser.add_argument("--timeout", type=float, default=os.getenv("EASTMONEY_INTRADAY_CHANGES_TIMEOUT", "20"), help="HTTP timeout seconds.")
+    parser.add_argument("--retries", type=int, default=os.getenv("EASTMONEY_INTRADAY_CHANGES_RETRIES", "1"), help="Retries per request.")
     parser.add_argument("--retry-sleep", type=float, default=1.0, help="Retry backoff base seconds.")
     parser.add_argument("--proxy", default=None, help="Optional HTTP(S) proxy URL.")
     parser.add_argument("--change-types", nargs="*", default=None, help="Optional subset of Chinese change type names.")
-    return parser.parse_args()
+    return parse_dated_args(parser)
 
 
 def main() -> str:
     configure_project()
     args = parse_args()
     trade_date = pd.to_datetime(args.date).date().isoformat()
-    client = EastMoneyDataClient.from_env()
-    if args.proxy:
-        client = EastMoneyDataClient.from_env()
-        client = EastMoneyDataClient(
-            user_id=client.user_id,
-            ut_token=client.ut_token,
-            ct_token=client.ct_token,
-            app_user_agent=client.app_user_agent,
-            webview_user_agent=client.webview_user_agent,
-            stock_card_client_version=client.stock_card_client_version,
-            platform=client.platform,
-            device_id=client.device_id,
-            em_gt=client.em_gt,
-            proxy=args.proxy,
-            timeout=args.timeout,
-            retries=args.retries,
-            retry_sleep=args.retry_sleep,
-        )
-    else:
-        client.timeout = args.timeout
-        client.retries = args.retries
-        client.retry_sleep = args.retry_sleep
+    client = EastMoneyDataClient.from_env(
+        proxy=args.proxy or None,
+        timeout=args.timeout,
+        retries=args.retries,
+        retry_sleep=args.retry_sleep,
+    )
 
     rows = fetch_all_changes(
         client,
@@ -278,8 +224,10 @@ def main() -> str:
         change_types=args.change_types,
     )
     df = rows_to_frame(rows)
-    written = write_upsert_partitioned(df, Path(args.data_root), args.table_name)
-    record_task_output(args.table_name, Path(args.data_root) / args.table_name, len(df))
+    written = upsert_date_partitions(
+        df, Path(args.data_root), args.table_name, merge_rows=merge_duplicate_rows,
+    )
+
     summary = f"table={args.table_name}; rows={len(df)}; partitions={len(written)}"
     print(f"write_done {summary}")
     return summary
